@@ -1,35 +1,46 @@
 globals
 [
   ;;; constants
-  patchWidth
+  patch-width
+  tick-length-in-seconds
   max-perception-distance
-  target_point_buffer_distance
 
   ;;; parameters
+  target-point-buffer-distance
+  obstacle-damage
+  track-mark-probability
+  track-pregeneration-period
 
   ;;;; hunters
-  num_hunters
+  num-hunters
+
   hunters_height_min
   hunters_height_max
   hunters_speed_min
   hunters_speed_max
+  hunters_tte_min
+  hunters_tte_max
 
   ;;;; preys
-  num_preys
+  num-preys
   preys_group_max_size
+
   preys_height_min
   preys_height_max
   preys_speed_min
   preys_speed_max
-  preys-move-probability
-  preys_stamina_recovery_rate
+  preys_tte_min
+  preys_tte_max
 
   ;;;; environment
-  attractors-density
+  init-obstacle-scale
+  prey-attractor-probability
 
   ;;; variables
-  starting_point
-  target_point
+  starting-point
+  target-point
+
+  prey-attraction-max
 ]
 
 breed [ hunters hunter ]
@@ -39,25 +50,25 @@ breed [ preys prey ]
 hunters-own
 [
   height
-  max-speed
-  stamina
+  time-to-exhaustion
 
   ;;; internal/private
   hunters-in-sight
   preys-in-sight
+  time-running
 ]
 
 preys-own
 [
   height
-  stamina
+  time-to-exhaustion
 
   group_id
 
   ;;; internal/private
   hunters-in-sight
   preys-in-sight
-  moving
+  time-running
 ]
 
 patches-own
@@ -65,23 +76,25 @@ patches-own
   elevation
   obstacle
   prey-attraction
+
+  track
 ]
 
 to setup
 
   clear-all
 
-  set_input
+  set-input
 
-  setup_environment
+  setup-environment
 
-  setup_prey_groups
+  setup-prey-groups
 
-  setup_hunting_party
+  setup-hunting-party
 
-  initialise_perception_links
+  initialise-perceptions
 
-  update-perceptions
+  ;generate-recent-tracks
 
   update-display
 
@@ -91,100 +104,110 @@ end
 
 to go
 
-  ask preys
+  ask turtles
   [
-    ifelse (any? hunters-in-sight) and (stamina > preys_speed_min)
+    ifelse (breed = preys)
     [
-      move-away-from hunters-in-sight
+      update-prey
     ]
     [
-      prey-baseline-behaviour
+      update-hunter
     ]
-
-    ;;; recovery
-    set stamina stamina + preys_stamina_recovery_rate
   ]
-
-  ;ask hunters [ move-towards preys-in-sight ]
-
-  update-perceptions
 
   update-display
 
+  tick
+
 end
 
-to set_input
+to set-input
 
   random-seed SEED
 
-  set patchWidth 100 ;;; meters
+  set patch-width 100 ;;; meters
+
+  set tick-length-in-seconds 60 ;;; 1 tick = 1 minute
 
   set max-perception-distance sqrt ((world-width ^ 2) + (world-height ^ 2)) ;;; measured in patches orthogonal dimensions (default: diagonal distance)
 
-  set target_point_buffer_distance 10 ;;; 100x10m = 1km
-
   ;;; parameters
 
+  ;;;; environment
+  set init-obstacle-scale par_init-obstacle-scale
+
+  set prey-attractor-probability par_prey-attractor-probability
+
+  set obstacle-damage par_obstacle-damage ;;; damage (m obstacle) / 1 (m height) * 1 (sec)
+
+  set track-mark-probability par_track-mark-probability ;;; prob. / 1 (m height) * 1 (sec)
+
+  set track-pregeneration-period par_track-pregeneration-period
+
   ;;;; hunters
-  set num_hunters 3
-  set hunters_height_min 1 ; meters
-  set hunters_height_max 2
-  set hunters_speed_min convert_kmperh_to_patchpertick 1
-  set hunters_speed_max convert_kmperh_to_patchpertick 30
+  set num-hunters par_num-hunters
+  set hunters_height_min par_hunters_height_min ; meters
+  set hunters_height_max par_hunters_height_max
+  set hunters_speed_min convert-kmperh-to-patchpersec par_hunters_speed_min ; patch width (m) per second
+  set hunters_speed_max convert-kmperh-to-patchpersec par_hunters_speed_max
+  set hunters_tte_min par_hunters_tte_min ; minutes
+  set hunters_tte_max par_hunters_tte_max
 
   ;;;; preys
-  set num_preys 20
-  set preys_group_max_size 5
-  set preys_height_min 1 ; meters
-  set preys_height_max 2
-  set preys_speed_min convert_kmperh_to_patchpertick 1 ; meter/minute
-  set preys_speed_max convert_kmperh_to_patchpertick 80
-  set preys-move-probability 0.5
-  set preys_stamina_recovery_rate 1
+  set num-preys par_num-preys
+  set preys_group_max_size par_preys_group_max_size
+  set preys_height_min par_preys_height_min ; meters
+  set preys_height_max par_preys_height_max
+  set preys_speed_min convert-kmperh-to-patchpersec par_preys_speed_min ; patch width (m) per second
+  set preys_speed_max convert-kmperh-to-patchpersec par_preys_speed_max
+  set preys_tte_min par_preys_tte_min ; minutes
+  set preys_tte_max par_preys_tte_max
 
-  ;;;; environment
-  set attractors-density 0.01
+  ;;;; positions
+  set starting-point patch (min-pxcor + floor (world-width / 2)) (min-pycor + floor (world-height / 2))
+
+  set target-point-buffer-distance par_target-point-buffer-distance ; km
+
+  set target-point one-of patches with [count neighbors4 < 4] ;;; choose apatch at the edges as target point
 
 end
 
-to-report convert_kmperh_to_patchpertick [ kmperh ]
-  ; km/h -> m/min -> patch/tick
-  let mpermin kmperh * (1000 / 60)
-  let patchpertick mpermin / patchWidth
-  report patchpertick
-end
-
-to setup_environment
+to setup-environment
 
   ask patches
   [
     set elevation random-float 100
-    set obstacle (random-float 1) * (random-float 1)
+    set obstacle (random-float 1) * (random-float 1) * init-obstacle-scale
     set prey-attraction 0
-    if (random-float 1 < attractors-density) [ set prey-attraction 100 ]
+    if (random-float 100 < prey-attractor-probability) [ set prey-attraction 100 ]
+
+    set track (list)
   ]
 
   repeat 2 [ diffuse elevation 0.5 ]
 
-  repeat 5 [ diffuse prey-attraction 0.1 ]
+  repeat 5 [ diffuse prey-attraction 0.3 ]
+
+  set prey-attraction-max max [prey-attraction] of patches
 
 end
 
-to setup_prey_groups
+to setup-prey-groups
 
-  create-preys num_preys
+  create-preys num-preys
   [
     set height preys_height_min + random-float (preys_height_max - preys_height_min)
-    set stamina 100
+    set time-to-exhaustion preys_tte_min + random (preys_tte_max - preys_tte_min)
+    set time-to-exhaustion time-to-exhaustion * 60 ; convert minutes to seconds
 
-    set moving false
-
-    set size 1
     set shape "sheep"
   ]
 
   let unassigned preys
   let currentID 0
+
+  let bufferDistance target-point-buffer-distance * 1000 / patch-width ;;; km -> m -> patch widths
+  let validInitialPositions patches with [distance starting-point > bufferDistance]
 
   while [any? unassigned]
   [
@@ -196,7 +219,7 @@ to setup_prey_groups
       set unassigned other unassigned
     ]
 
-    ask one-of patches
+    ask one-of validInitialPositions
     [
       let me self
       ask preys with [group_id = currentID]
@@ -210,51 +233,98 @@ to setup_prey_groups
 
 end
 
-to setup_hunting_party
+to generate-recent-tracks
 
-  set starting_point patch (min-pxcor + floor (world-width / 2)) (min-pycor + floor (world-height / 2))
-  set target_point one-of patches with [distance starting_point > target_point_buffer_distance]
+  let trackPregenerationPeriodInMinutes track-pregeneration-period * 60 ;;; hours -> minutes
 
-  ask starting_point
+  repeat trackPregenerationPeriodInMinutes
+  [
+    ask preys [ update-prey ]
+  ]
+
+end
+
+to setup-hunting-party
+
+  ask starting-point
   [
     set obstacle 0 ;;; clear starting point
 
-    sprout-hunters num_hunters
+    sprout-hunters num-hunters
     [
       set height hunters_height_min + random-float (hunters_height_max - hunters_height_min)
-      set stamina 100
+      set time-to-exhaustion hunters_tte_min + random (hunters_tte_max - hunters_tte_min)
+      set time-to-exhaustion time-to-exhaustion * 60 ; convert minutes to seconds
 
-      set size 1
       set shape "person"
     ]
   ]
 
 end
 
-to initialise_perception_links
+to initialise-perceptions
 
   ask turtles
   [
-    create-links-to other hunters [ set color red set hidden? true ]
-    create-links-to other preys [ set color yellow set hidden? true ]
+    set hunters-in-sight (turtle-set)
+    set preys-in-sight (turtle-set)
+
+    initialise-perception-links
   ]
 
 end
 
-to update-perceptions
+to initialise-perception-links
 
-  ask turtles
+  create-links-to other hunters [ set color red set hidden? true ]
+  create-links-to other preys [ set color yellow set hidden? true ]
+
+end
+
+to update-prey
+
+  ifelse (any? hunters-in-sight)
   [
-    let me self
-
-    ask my-out-links [ set hidden? true ]
-
-    set hunters-in-sight other hunters with [presence-detected-by me]
-    set preys-in-sight other preys with [presence-detected-by me]
-
-    ask hunters-in-sight [ ask in-link-from me [ set hidden? false ] ]
-    ask preys-in-sight [ ask in-link-from me [ set hidden? false ] ]
+    move-away-from hunters-in-sight
   ]
+  [
+    prey-baseline-behaviour
+  ]
+
+  if (count [neighbors4] of patch-here < 4)
+  [
+    print (word "Prey " who " escaped from area")
+    die
+  ]
+
+  if (time-running >= time-to-exhaustion)
+  [
+    ;;; exhasted
+    ;;; TODO: time of recovery greater than 1 tick
+    set time-running 0
+  ]
+
+  update-perception
+
+end
+
+to update-hunter
+
+  ; move-towards preys-in-sight
+
+end
+
+to update-perception
+
+  let me self
+
+  ask my-out-links [ set hidden? true ]
+
+  set hunters-in-sight other hunters with [presence-detected-by me]
+  set preys-in-sight other preys with [presence-detected-by me]
+
+  ask hunters-in-sight [ ask in-link-from me [ set hidden? false ] ]
+  ask preys-in-sight [ ask in-link-from me [ set hidden? false ] ]
 
 end
 
@@ -279,6 +349,10 @@ end
 
 to-report line-of-sight
 
+  ;;; a ray casting algorithm that takes into account:
+  ;;; 1. elevation (ground level),
+  ;;; 2. height of turtles
+  ;;; 3. height of obstacles
   let visiblePatches (patch-set)
 
   let vantagePointHeight elevation + height
@@ -319,7 +393,7 @@ to-report line-of-sight
       ifelse a1 < a2
       [
         set visiblePatches (patch-set visiblePatches aPatch)
-        ask aPatch [ set pcolor red ]
+        ;ask aPatch [ set pcolor red ]
 
         set a1 a2
 
@@ -339,88 +413,211 @@ end
 
 to move-away-from [ someTurtles ]
 
-  ;; Set the distance the turtle moves as the maximum
-  let speed min (list preys_speed_max stamina)
-  ;;; TODO: possibly make it proportional to distance
-  let moveDistance speed
-
   ;;; make it acceptable that someTurtle is given as a single turtle
   set someTurtles (turtle-set someTurtles)
 
-  ;; Find the nearest turtle
-  let closestTurtle min-one-of someTurtles [distance myself]
-
-  let oppositeHeading towards closestTurtle - 180
-  face best-escape-patch oppositeHeading moveDistance
-
-  ;;; consume stamina
-  set stamina stamina - moveDistance
-
-  fd MoveDistance
-  set moving true
-
-end
-
-to-report best-escape-patch [ targetHeading moveDistance ]
-  ;print (word targetHeading ", " moveDistance)
-  let bestEscapePatch patch-at-heading-and-distance targetHeading moveDistance
-
-  ;; modify direction if trapped at the edges
-  if (bestEscapePatch = nobody)
+  repeat tick-length-in-seconds
   [
-    ;;; recalculate bestEscapePatch as the patch in the closest direction to targetHeading
-    let closestAngle targetHeading - 180
-    foreach shuffle n-values 36 [ i -> i * 10 ] ; sample directions every 10 degrees
+    if (time-running < time-to-exhaustion)
     [
-      gridAngle ->
-      let angleDifference abs (targetHeading - gridAngle)
-      let closestAngleDifference abs (targetHeading - closestAngle)
+      ;; Find the nearest turtle
+      let closestTurtle min-one-of someTurtles [distance myself]
 
-      let patchCandidate patch-at-heading-and-distance gridAngle moveDistance
+      ;; Set the distance the turtle moves as the maximum
+      let moveDistance (get-speed-in-patch preys_speed_max patch-here)
+      ;;; TODO: possibly make it proportional to distance to the other
 
-      if (patchCandidate != nobody and angleDifference < closestAngleDifference)
-      [
-        set closestAngle gridAngle
-        set bestEscapePatch patchCandidate
-      ]
+      let oppositeHeading towards closestTurtle - 180
+      set heading (get-best-route-heading oppositeHeading moveDistance)
+
+      fd MoveDistance
+
+      impact-vegetation
+
+      ;;; account for exertion
+      set time-running time-running + 1
     ]
   ]
-
-  report bestEscapePatch
 
 end
 
 to prey-baseline-behaviour
 
+  let moving false
+
   let moveDistance 0
 
-  ;;; change rule to account for spotted attractors
-  ifelse (random-float 1 <= preys-move-probability)
+  ;; set the default distance the turtle moves as the minimum
+  let speed preys_speed_min
+
+  ;;; *Define target heading* ;;;
+
+  ;;; First priority: staying in an attractive patch (or moving out from unattractive ones)
+
+  ;;; get a relative measure of how attractive is the current patch
+  let patch-pull 100 * ([prey-attraction] of patch-here) / prey-attraction-max
+
+  if (random-float 100 > patch-pull)
   [
-    ifelse moving
+    ;;; Second priority: keeping the group together
+    ;;; NOTE: checks if all group members are in sight and, if so, head towards the closest one
+    let myGroupId group_id
+    let groupMembers other preys with [group_id = myGroupId]
+    let groupMembersNotInSight groupMembers with [not presence-detected-by myself]
+    if (count groupMembers > 0 and count groupMembers = count groupMembersNotInSight)
     [
-      rt (- 45 + random 90) ;;; random direction biased by movement
-    ]
-    [
-      rt random 360 ;;; random direction
+      face min-one-of groupMembersNotInSight [distance myself]
     ]
 
-    ;; Set the distance the turtle moves as the minimum
-    let speed preys_speed_min
-    set MoveDistance speed
+    rt (- 30 + random 60) ;;; add random direction biased by default heading
 
-    set stamina stamina - speed;;; consume stamina
-
-    fd MoveDistance
     set moving true
   ]
-  [ set moving false ]
+
+  ;;; *Move towards target heading* ;;;
+
+  ifelse (moving)
+  [
+    ;;; keep track of the target heading
+    let targetHeading heading
+
+    repeat tick-length-in-seconds
+    [
+      set MoveDistance (get-speed-in-patch speed patch-here)
+
+      set heading (get-best-route-heading targetHeading moveDistance)
+
+      fd MoveDistance
+
+      impact-vegetation
+    ]
+  ]
+  [
+    repeat tick-length-in-seconds [ impact-vegetation ]
+  ]
+
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; From Megafauna_Hunting_Pressure_model (Isaac I. Ullah)
+to-report mean-heading [ headings ]
+  ;;calculate average direction of turtle movement
+  let mean-x mean map sin headings
+  let mean-y mean map cos headings
+  report atan mean-x mean-y
+end
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to-report get-best-route-heading [ targetHeading moveDistance ]
+
+  let bestEscapePatch existing-patch-at-heading-and-distance targetHeading moveDistance
+  let closestAngle targetHeading
+
+  ;;; if moving to a new patch
+  if (bestEscapePatch != patch-here)
+  [
+    ;;; that has a higher average obstacle height
+    if ([obstacle] of bestEscapePatch > [obstacle] of patch-here)
+    [
+      ;;; recalculate bestEscapePatch as the patch:
+      ;;; 1. in the closest direction to targetHeading
+      ;;; 2. with the lowest mean obstacle height
+      ;;; Notice that when lacking a better option, this will return the same original bestEscapePatch
+      set closestAngle targetHeading - 180 ; start with worse angle
+      foreach shuffle n-values 36 [ i -> i * 10 ] ; sample directions every 10 degrees
+      [
+        gridAngle ->
+        let angleDifference abs (targetHeading - gridAngle)
+        let closestAngleDifference abs (targetHeading - closestAngle)
+
+        let patchCandidate existing-patch-at-heading-and-distance gridAngle moveDistance
+
+        if ([obstacle] of patchCandidate < [obstacle] of bestEscapePatch and angleDifference < closestAngleDifference)
+        [
+          set closestAngle gridAngle
+          set bestEscapePatch patchCandidate
+        ]
+      ]
+    ]
+  ]
+
+;  ;; modify direction if trapped at the edges
+;  if (bestEscapePatch = nobody)
+;  [
+;    ;;; recalculate bestEscapePatch as the patch in the closest direction to targetHeading
+;    let closestAngle targetHeading - 180
+;    foreach shuffle n-values 36 [ i -> i * 10 ] ; sample directions every 10 degrees
+;    [
+;      gridAngle ->
+;      let angleDifference abs (targetHeading - gridAngle)
+;      let closestAngleDifference abs (targetHeading - closestAngle)
+;
+;      let patchCandidate patch-at-heading-and-distance gridAngle moveDistance
+;
+;      if (patchCandidate != nobody and angleDifference < closestAngleDifference)
+;      [
+;        set closestAngle gridAngle
+;        set bestEscapePatch patchCandidate
+;      ]
+;    ]
+;  ]
+
+  report closestAngle
+
+end
+
+to-report get-speed-in-patch [ freeSpeed aPatch ]
+
+  ;;; penalise only if patch obstacle is higher than turtle (ego) height
+  let penalisation 0
+  if ([obstacle] of aPatch > height)
+  [
+    set penalisation height / [obstacle] of aPatch
+  ]
+
+  report freeSpeed * (1 - penalisation)
+
+end
+
+to-report existing-patch-at-heading-and-distance [ aHeading aDistance ]
+
+  let aPatch patch-at-heading-and-distance aHeading aDistance
+  let modDistance aDistance
+
+  while [aPatch = nobody]
+  [
+    set modDistance modDistance - 0.2 ; small enough step to detect all patches in diagonals
+    set aPatch patch-at-heading-and-distance aHeading modDistance
+  ]
+
+  report aPatch
+
+end
+
+to impact-vegetation
+
+  let obstacleDamage obstacle-damage * [height] of self
+  let trackMarkProbability track-mark-probability * 100 * [height] of self
+
+  ask patch-here
+  [
+    ;;; clear vegetation obstacles
+    set obstacle max (list 0 (obstacle - obstacleDamage))
+
+    ;;; create mark, spurr, track
+    if (trackMarkProbability > random-float 100)
+    [
+      set track fput myself track
+    ]
+  ]
 
 end
 
 to update-display
 
   paint-patches
+
+  scale-agents
 
 end
 
@@ -432,6 +629,8 @@ to paint-patches
   let max-obstacle max [obstacle] of patches
   let min-height min [elevation + obstacle] of patches
   let max-height max [elevation + obstacle] of patches
+  let min-attraction min [prey-attraction] of patches
+  let max-attraction max [prey-attraction] of patches
 
   ask patches
   [
@@ -442,8 +641,50 @@ to paint-patches
     if (display-mode = "elevation+obstacle")
     [ set pcolor scale-color grey (elevation + obstacle) min-height max-height ]
     if (display-mode = "prey-attraction")
-    [ set pcolor scale-color red (prey-attraction) 0 100 ]
+    [ set pcolor scale-color red (prey-attraction) min-attraction max-attraction ]
   ]
+
+  if (display-track-marks)
+  [
+    ask patches with [length track > 0] [ set pcolor red ]
+  ]
+
+  if (display-target-point)
+  [
+    ask target-point [ set pcolor orange ]
+  ]
+
+end
+
+to scale-agents
+
+  ask turtles
+  [
+    set size patch-size * agent-scale
+  ]
+
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; HELPERS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to-report convert-kmperh-to-patchpersec [ kmperh ]
+  ; km/h -> m/sec -> patch/sec
+  let mpersec kmperh * (1000 / 3600)
+  let patchpersec mpersec / patch-width
+  report patchpersec
+end
+
+to-report convert_ticks_to_hours
+
+  report floor (tick-length-in-seconds * ticks / 3600)
+
+end
+
+to-report convert_ticks_to_remainder_minutes
+
+  report ticks mod 60
 
 end
 @#$#@#$#@
@@ -475,10 +716,10 @@ ticks
 30.0
 
 BUTTON
-9
-18
-72
-51
+10
+61
+73
+94
 NIL
 setup
 NIL
@@ -492,10 +733,10 @@ NIL
 1
 
 BUTTON
-76
-17
-139
-50
+77
+60
+140
+93
 NIL
 go
 NIL
@@ -509,12 +750,12 @@ NIL
 1
 
 PLOT
-7
-145
-207
-295
+1067
+283
+1376
+433
 height
-NIL
+height (m)
 NIL
 0.0
 10.0
@@ -522,18 +763,18 @@ NIL
 10.0
 true
 true
-"set-plot-x-range 0 3" ""
+"set-plot-x-range 0 ceiling (1.1 * max (list (max [height] of hunters) (max [height] of preys)))" ""
 PENS
 "preys" 1.0 1 -4079321 true "set-plot-pen-interval 0.1\nhistogram [height] of preys" "set-plot-pen-interval 0.1\nhistogram [height] of preys"
 "hunters" 1.0 1 -5298144 true "set-plot-pen-interval 0.1\nhistogram [height] of hunters" "set-plot-pen-interval 0.1\nhistogram [height] of hunters"
 
 PLOT
-8
-299
-208
-449
-stamina
-NIL
+1067
+433
+1377
+583
+time to exhaustion (TTE)
+TTE (seconds)
 NIL
 0.0
 10.0
@@ -541,16 +782,16 @@ NIL
 10.0
 true
 true
-"set-plot-x-range -1 101\n" ""
+"set-plot-x-range 0 ceiling (1.1 * max (list (max [time-to-exhaustion] of hunters) (max [time-to-exhaustion] of preys)))\n" ""
 PENS
-"preys" 1.0 1 -4079321 true "histogram [stamina] of preys" "histogram [stamina] of preys"
-"hunters" 1.0 1 -5298144 true "histogram [stamina] of hunters" "histogram [stamina] of hunters"
+"preys" 1.0 1 -4079321 true "histogram [time-to-exhaustion] of preys" "histogram [time-to-exhaustion] of preys"
+"hunters" 1.0 1 -5298144 true "histogram [time-to-exhaustion] of hunters" "histogram [time-to-exhaustion] of hunters"
 
 INPUTBOX
-7
-80
-85
-140
+21
+98
+99
+158
 SEED
 0.0
 1
@@ -558,20 +799,20 @@ SEED
 Number
 
 CHOOSER
-30
-463
-185
-508
+35
+160
+190
+205
 display-mode
 display-mode
 "elevation" "obstacle" "elevation+obstacle" "prey-attraction"
 2
 
 BUTTON
-54
-514
-167
-547
+41
+273
+172
+306
 NIL
 update-display
 NIL
@@ -590,7 +831,7 @@ PLOT
 623
 577
 obstacles
-NIL
+patch obstacle height (m)
 NIL
 0.0
 10.0
@@ -598,15 +839,15 @@ NIL
 10.0
 true
 false
-"set-plot-x-range 0 100" ""
+"set-plot-x-range 0 3\nset-histogram-num-bars 20" ""
 PENS
-"default" 1.0 1 -16777216 true "" "histogram [obstacle * 100] of patches"
+"default" 1.0 1 -16777216 true "" "histogram [obstacle] of patches"
 
 BUTTON
-145
-17
-208
-50
+146
+60
+209
+93
 NIL
 go
 T
@@ -618,6 +859,428 @@ NIL
 NIL
 NIL
 1
+
+INPUTBOX
+126
+98
+194
+158
+agent-scale
+1.0
+1
+0
+Number
+
+MONITOR
+63
+10
+120
+55
+hours
+convert_ticks_to_hours
+17
+1
+11
+
+MONITOR
+119
+10
+169
+55
+minutes
+convert_ticks_to_remainder_minutes
+17
+1
+11
+
+SWITCH
+36
+205
+179
+238
+display-track-marks
+display-track-marks
+0
+1
+-1000
+
+SLIDER
+632
+72
+944
+105
+par_prey-attractor-probability
+par_prey-attractor-probability
+0
+100
+1.0
+1
+1
+%
+HORIZONTAL
+
+SLIDER
+632
+105
+944
+138
+par_init-obstacle-scale
+par_init-obstacle-scale
+0
+5
+3.0
+0.01
+1
+m height
+HORIZONTAL
+
+SLIDER
+638
+299
+863
+332
+par_target-point-buffer-distance
+par_target-point-buffer-distance
+0
+10
+2.0
+0.1
+1
+Km
+HORIZONTAL
+
+SLIDER
+947
+72
+1329
+105
+par_obstacle-damage
+par_obstacle-damage
+0
+1
+0.01
+0.01
+1
+m height (obstacle) / 1 m height (body) * 1 sec
+HORIZONTAL
+
+SLIDER
+947
+106
+1329
+139
+par_track-mark-probability
+par_track-mark-probability
+0
+100
+1.0
+1
+1
+% / 1 m height (body) * 1 sec
+HORIZONTAL
+
+SLIDER
+632
+137
+944
+170
+par_track-pregeneration-period
+par_track-pregeneration-period
+0
+100
+12.0
+1
+1
+hours
+HORIZONTAL
+
+TEXTBOX
+634
+49
+784
+67
+Environment
+14
+0.0
+1
+
+MONITOR
+527
+445
+616
+490
+patch-width (m)
+patch-width
+17
+1
+11
+
+SLIDER
+638
+212
+830
+245
+par_num-hunters
+par_num-hunters
+0
+10
+3.0
+1
+1
+hunters
+HORIZONTAL
+
+TEXTBOX
+641
+193
+791
+211
+Hunters
+14
+0.0
+1
+
+TEXTBOX
+860
+192
+1010
+210
+Preys
+14
+0.0
+1
+
+SLIDER
+641
+353
+832
+386
+par_hunters_height_min
+par_hunters_height_min
+1
+par_hunters_height_max
+1.5
+0.01
+1
+m
+HORIZONTAL
+
+SLIDER
+640
+387
+831
+420
+par_hunters_height_max
+par_hunters_height_max
+par_hunters_height_min
+2
+2.0
+0.01
+1
+m
+HORIZONTAL
+
+SLIDER
+641
+430
+832
+463
+par_hunters_speed_min
+par_hunters_speed_min
+1
+par_hunters_speed_max
+5.0
+0.1
+1
+km/h
+HORIZONTAL
+
+SLIDER
+640
+467
+833
+500
+par_hunters_speed_max
+par_hunters_speed_max
+par_hunters_speed_min
+30
+30.0
+0.1
+1
+km/h
+HORIZONTAL
+
+SLIDER
+645
+509
+835
+542
+par_hunters_tte_min
+par_hunters_tte_min
+1
+par_hunters_tte_max
+5.0
+1
+1
+minutes
+HORIZONTAL
+
+SLIDER
+645
+543
+836
+576
+par_hunters_tte_max
+par_hunters_tte_max
+par_hunters_tte_min
+360
+30.0
+1
+1
+minutes
+HORIZONTAL
+
+SLIDER
+854
+353
+1045
+386
+par_preys_height_min
+par_preys_height_min
+1
+par_preys_height_max
+1.5
+0.01
+1
+m
+HORIZONTAL
+
+SLIDER
+854
+387
+1045
+420
+par_preys_height_max
+par_preys_height_max
+par_preys_height_min
+2
+2.0
+0.01
+1
+m
+HORIZONTAL
+
+SLIDER
+854
+432
+1047
+465
+par_preys_speed_min
+par_preys_speed_min
+1
+par_preys_speed_max
+30.0
+0.1
+1
+km/h
+HORIZONTAL
+
+SLIDER
+854
+466
+1047
+499
+par_preys_speed_max
+par_preys_speed_max
+par_preys_speed_min
+90
+75.0
+0.1
+1
+km/h
+HORIZONTAL
+
+SLIDER
+854
+509
+1047
+542
+par_preys_tte_min
+par_preys_tte_min
+1
+par_preys_tte_max
+60.0
+1
+1
+minutes
+HORIZONTAL
+
+SLIDER
+854
+544
+1047
+577
+par_preys_tte_max
+par_preys_tte_max
+par_preys_tte_min
+300
+100.0
+1
+1
+minutes
+HORIZONTAL
+
+SLIDER
+851
+211
+1041
+244
+par_num-preys
+par_num-preys
+0
+100
+50.0
+1
+1
+preys
+HORIZONTAL
+
+SLIDER
+812
+257
+1045
+290
+par_preys_group_max_size
+par_preys_group_max_size
+0
+100
+10.0
+1
+1
+preys/group
+HORIZONTAL
+
+MONITOR
+638
+250
+726
+295
+NIL
+target-point
+17
+1
+11
+
+SWITCH
+36
+237
+181
+270
+display-target-point
+display-target-point
+0
+1
+-1000
 
 @#$#@#$#@
 ## WHAT IS IT?
