@@ -6,6 +6,7 @@ globals
   max-perception-distance
 
   ;;; parameters
+  ;;;; contextual
   target-point-buffer-distance
   obstacle-damage
   track-mark-probability
@@ -20,10 +21,13 @@ globals
   hunters_speed_max
   hunters_tte_min
   hunters_tte_max
+  hunters_reactiontime_min
+  hunters_reactiontime_max
 
   ;;;; preys
   num-preys
   preys_group_max_size
+  preys_safe-distance
 
   preys_height_min
   preys_height_max
@@ -31,6 +35,8 @@ globals
   preys_speed_max
   preys_tte_min
   preys_tte_max
+  preys_reactiontime_min
+  preys_reactiontime_max
 
   ;;;; environment
   init-obstacle-scale
@@ -51,10 +57,12 @@ hunters-own
 [
   height
   time-to-exhaustion
+  reaction-time
 
   ;;; internal/private
   hunters-in-sight
   preys-in-sight
+  reaction-counter
   time-running
 ]
 
@@ -62,12 +70,14 @@ preys-own
 [
   height
   time-to-exhaustion
+  reaction-time
 
   group_id
 
   ;;; internal/private
   hunters-in-sight
   preys-in-sight
+  reaction-counter
   time-running
 ]
 
@@ -152,16 +162,21 @@ to set-input
   set hunters_speed_max convert-kmperh-to-patchpersec par_hunters_speed_max
   set hunters_tte_min par_hunters_tte_min ; minutes
   set hunters_tte_max par_hunters_tte_max
+  set hunters_reactiontime_min par_hunters_reactiontime_min
+  set hunters_reactiontime_max par_hunters_reactiontime_max
 
   ;;;; preys
   set num-preys par_num-preys
   set preys_group_max_size par_preys_group_max_size
+  set preys_safe-distance par_preys_safe-distance / patch-width
   set preys_height_min par_preys_height_min ; meters
   set preys_height_max par_preys_height_max
   set preys_speed_min convert-kmperh-to-patchpersec par_preys_speed_min ; patch width (m) per second
   set preys_speed_max convert-kmperh-to-patchpersec par_preys_speed_max
   set preys_tte_min par_preys_tte_min ; minutes
   set preys_tte_max par_preys_tte_max
+  set preys_reactiontime_min par_preys_reactiontime_min
+  set preys_reactiontime_max par_preys_reactiontime_max
 
   ;;;; positions
   set starting-point patch (min-pxcor + floor (world-width / 2)) (min-pycor + floor (world-height / 2))
@@ -199,6 +214,7 @@ to setup-prey-groups
     set height preys_height_min + random-float (preys_height_max - preys_height_min)
     set time-to-exhaustion preys_tte_min + random (preys_tte_max - preys_tte_min)
     set time-to-exhaustion time-to-exhaustion * 60 ; convert minutes to seconds
+    set reaction-time preys_reactiontime_min + random (preys_reactiontime_max - preys_reactiontime_min)
 
     set shape "sheep"
   ]
@@ -255,6 +271,7 @@ to setup-hunting-party
       set height hunters_height_min + random-float (hunters_height_max - hunters_height_min)
       set time-to-exhaustion hunters_tte_min + random (hunters_tte_max - hunters_tte_min)
       set time-to-exhaustion time-to-exhaustion * 60 ; convert minutes to seconds
+      set reaction-time hunters_reactiontime_min + random (hunters_reactiontime_max - hunters_reactiontime_min)
 
       set shape "person"
     ]
@@ -285,19 +302,26 @@ to update-prey
 
   ifelse (any? hunters-in-sight)
   [
+    ;; initialise reaction counter, only if not already on the run or processing a reaction
+    if (time-running = 0 and reaction-counter = 0)
+    [ set reaction-counter reaction-time ]
+
     move-away-from hunters-in-sight
   ]
   [
+    set time-running 0
+
     prey-baseline-behaviour
   ]
 
   if (count [neighbors4] of patch-here < 4)
   [
-    print (word "Prey " who " escaped from area")
+    print (word "Prey " who " and group " group_id " escaped from hunting area")
+    ask other preys with [group_id = [group_id] of myself] [ die ]
     die
   ]
 
-  if (time-running >= time-to-exhaustion)
+  if (time-running = time-to-exhaustion)
   [
     ;;; exhasted
     ;;; TODO: time of recovery greater than 1 tick
@@ -415,29 +439,47 @@ to move-away-from [ someTurtles ]
 
   ;;; make it acceptable that someTurtle is given as a single turtle
   set someTurtles (turtle-set someTurtles)
-
+  print (word "prey " who " sees hunter" ([who] of someTurtles))
   repeat tick-length-in-seconds
   [
-    if (time-running < time-to-exhaustion)
+    ifelse (reaction-counter > 0)
     [
-      ;; Find the nearest turtle
-      let closestTurtle min-one-of someTurtles [distance myself]
+      print (word "thinking... " reaction-counter " secs to reaction")
+        set reaction-counter reaction-counter - 1
+    ]
+    [
+      print "running away..."
+      ;; if reaction time has passed...
+      if (time-running < time-to-exhaustion)
+      [
+        print "... and not exhausted."
+        ;; ... and the turtle is not already exhausted
+        ;; Find the nearest turtle
+        let closestTurtle min-one-of someTurtles [distance myself]
+        print (word "distance before: " (distance closestTurtle))
+        ;; Modulate spped according to distance and safe-distance
+        let maxSpeed preys_speed_min
+        if ([distance myself] of closestTurtle < preys_safe-distance)
+        [
+          set maxSpeed preys_speed_max
+        ]
 
-      ;; Set the distance the turtle moves as the maximum
-      let moveDistance (get-speed-in-patch preys_speed_max patch-here)
-      ;;; TODO: possibly make it proportional to distance to the other
+        ;; Set the distance the turtle moves as the maximum
+        let moveDistance (get-speed-in-patch maxSpeed patch-here)
 
-      let oppositeHeading towards closestTurtle - 180
-      set heading (get-best-route-heading oppositeHeading moveDistance)
+        let oppositeHeading towards closestTurtle - 180
+        set heading (get-best-route-heading oppositeHeading moveDistance)
 
-      fd MoveDistance
+        fd MoveDistance
+        print (word "distance after: " (distance closestTurtle))
+        impact-vegetation
 
-      impact-vegetation
-
-      ;;; account for exertion
-      set time-running time-running + 1
+        ;;; account for exertion
+        set time-running time-running + 1
+      ]
     ]
   ]
+  print "minute has passed."
 
 end
 
@@ -499,47 +541,42 @@ to prey-baseline-behaviour
 end
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; From Megafauna_Hunting_Pressure_model (Isaac I. Ullah)
-to-report mean-heading [ headings ]
-  ;;calculate average direction of turtle movement
-  let mean-x mean map sin headings
-  let mean-y mean map cos headings
-  report atan mean-x mean-y
-end
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 to-report get-best-route-heading [ targetHeading moveDistance ]
 
-  let bestEscapePatch existing-patch-at-heading-and-distance targetHeading moveDistance
-  let closestAngle targetHeading
+  let bestAngle targetHeading
 
-  ;;; if moving to a new patch
-  if (bestEscapePatch != patch-here)
-  [
-    ;;; that has a higher average obstacle height
-    if ([obstacle] of bestEscapePatch > [obstacle] of patch-here)
-    [
-      ;;; recalculate bestEscapePatch as the patch:
-      ;;; 1. in the closest direction to targetHeading
-      ;;; 2. with the lowest mean obstacle height
-      ;;; Notice that when lacking a better option, this will return the same original bestEscapePatch
-      set closestAngle targetHeading - 180 ; start with worse angle
-      foreach shuffle n-values 36 [ i -> i * 10 ] ; sample directions every 10 degrees
-      [
-        gridAngle ->
-        let angleDifference abs (targetHeading - gridAngle)
-        let closestAngleDifference abs (targetHeading - closestAngle)
-
-        let patchCandidate existing-patch-at-heading-and-distance gridAngle moveDistance
-
-        if ([obstacle] of patchCandidate < [obstacle] of bestEscapePatch and angleDifference < closestAngleDifference)
-        [
-          set closestAngle gridAngle
-          set bestEscapePatch patchCandidate
-        ]
-      ]
-    ]
-  ]
+;  let bestEscapePatch existing-patch-at-heading-and-distance targetHeading moveDistance
+;
+;  ;;; if moving to a new patch
+;  if (bestEscapePatch != patch-here)
+;  [
+;    ;;; that has a higher average obstacle height than the agent's height
+;    if ([obstacle] of bestEscapePatch > height);[obstacle] of patch-here)
+;    [
+;      ;;; recalculate bestAngle as angle torwards the patch:
+;      ;;; 1. in the closest direction to targetHeading
+;      ;;; 2. with the lowest mean obstacle height
+;      ;;; Notice that when lacking a better option, this will return the same original bestEscapePatch
+;      set bestAngle targetHeading - 180 ; start with worse angle
+;      let closestAngleDifference abs (targetHeading - bestAngle)
+;      let sampleAngles shuffle n-values 36 [ i -> i * 10 ] ; sample directions every 10 degrees
+;
+;      foreach sampleAngles
+;      [
+;        gridAngle ->
+;        let angleDifference abs (targetHeading - gridAngle)
+;
+;        let patchCandidate existing-patch-at-heading-and-distance gridAngle moveDistance
+;
+;        if ([obstacle] of patchCandidate < [obstacle] of bestEscapePatch and angleDifference < closestAngleDifference)
+;        [
+;          set bestAngle gridAngle
+;          set bestEscapePatch patchCandidate
+;        ]
+;      ]
+;    ]
+;  ]
 
 ;  ;; modify direction if trapped at the edges
 ;  if (bestEscapePatch = nobody)
@@ -562,7 +599,7 @@ to-report get-best-route-heading [ targetHeading moveDistance ]
 ;    ]
 ;  ]
 
-  report closestAngle
+  report bestAngle
 
 end
 
@@ -806,7 +843,7 @@ CHOOSER
 display-mode
 display-mode
 "elevation" "obstacle" "elevation+obstacle" "prey-attraction"
-2
+1
 
 BUTTON
 41
@@ -936,9 +973,9 @@ HORIZONTAL
 
 SLIDER
 638
-299
+314
 863
-332
+347
 par_target-point-buffer-distance
 par_target-point-buffer-distance
 0
@@ -1141,6 +1178,36 @@ minutes
 HORIZONTAL
 
 SLIDER
+627
+584
+848
+617
+par_hunters_reactiontime_min
+par_hunters_reactiontime_min
+1
+par_hunters_reactiontime_max
+5.0
+1
+1
+seconds
+HORIZONTAL
+
+SLIDER
+626
+617
+848
+650
+par_hunters_reactiontime_max
+par_hunters_reactiontime_max
+par_hunters_reactiontime_min
+360
+30.0
+1
+1
+seconds
+HORIZONTAL
+
+SLIDER
 854
 353
 1045
@@ -1231,10 +1298,40 @@ minutes
 HORIZONTAL
 
 SLIDER
-851
-211
-1041
-244
+854
+584
+1066
+617
+par_preys_reactiontime_min
+par_preys_reactiontime_min
+1
+par_preys_reactiontime_max
+60.0
+1
+1
+seconds
+HORIZONTAL
+
+SLIDER
+854
+619
+1066
+652
+par_preys_reactiontime_max
+par_preys_reactiontime_max
+par_preys_reactiontime_min
+300
+100.0
+1
+1
+seconds
+HORIZONTAL
+
+SLIDER
+850
+213
+1040
+246
 par_num-preys
 par_num-preys
 0
@@ -1246,10 +1343,10 @@ preys
 HORIZONTAL
 
 SLIDER
-812
-257
-1045
-290
+810
+245
+1043
+278
 par_preys_group_max_size
 par_preys_group_max_size
 0
@@ -1261,10 +1358,10 @@ preys/group
 HORIZONTAL
 
 MONITOR
-638
-250
-726
-295
+637
+269
+725
+314
 NIL
 target-point
 17
@@ -1278,9 +1375,24 @@ SWITCH
 270
 display-target-point
 display-target-point
-0
+1
 1
 -1000
+
+SLIDER
+825
+280
+1043
+313
+par_preys_safe-distance
+par_preys_safe-distance
+1
+2000
+1000.0
+1
+1
+m
+HORIZONTAL
 
 @#$#@#$#@
 ## WHAT IS IT?
