@@ -4,6 +4,7 @@ globals
   patch-width
   tick-length-in-seconds
   max-perception-distance
+  max-shooting-distance
 
   ;;; parameters
   ;;;; contextual
@@ -47,6 +48,9 @@ globals
   target-point
 
   prey-attraction-max
+
+  hunter-prey-sightings
+  prey-hunter-sightings
 ]
 
 breed [ hunters hunter ]
@@ -55,22 +59,28 @@ breed [ preys prey ]
 
 hunters-own
 [
+  alert
   height
   time-to-exhaustion
   reaction-time
+  cooldown-time
 
   ;;; internal/private
   hunters-in-sight
   preys-in-sight
+  following-track
   reaction-counter
-  time-running
+  running-counter
+  cooldown-counter
 ]
 
 preys-own
 [
+  alert
   height
   time-to-exhaustion
   reaction-time
+  cooldown-time
 
   group_id
 
@@ -78,7 +88,8 @@ preys-own
   hunters-in-sight
   preys-in-sight
   reaction-counter
-  time-running
+  running-counter
+  cooldown-counter
 ]
 
 patches-own
@@ -89,6 +100,10 @@ patches-own
 
   track
 ]
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; SETUP ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 to setup
 
@@ -106,40 +121,35 @@ to setup
 
   ;generate-recent-tracks
 
+  initialise-output
+
   update-display
 
   reset-ticks
 
 end
 
-to go
+to set-input
 
-  ask turtles
-  [
-    ifelse (breed = preys)
-    [
-      update-prey
-    ]
-    [
-      update-hunter
-    ]
-  ]
+  set-constants
 
-  update-display
-
-  tick
+  set-parameters
 
 end
 
-to set-input
-
-  random-seed SEED
+to set-constants
 
   set patch-width 100 ;;; meters
 
   set tick-length-in-seconds 60 ;;; 1 tick = 1 minute
 
   set max-perception-distance sqrt ((world-width ^ 2) + (world-height ^ 2)) ;;; measured in patches orthogonal dimensions (default: diagonal distance)
+
+end
+
+to set-parameters
+
+  random-seed SEED
 
   ;;; parameters
 
@@ -187,6 +197,13 @@ to set-input
 
 end
 
+to initialise-output
+
+  set hunter-prey-sightings 0
+  set prey-hunter-sightings 0
+
+end
+
 to setup-environment
 
   ask patches
@@ -215,6 +232,7 @@ to setup-prey-groups
     set time-to-exhaustion preys_tte_min + random (preys_tte_max - preys_tte_min)
     set time-to-exhaustion time-to-exhaustion * 60 ; convert minutes to seconds
     set reaction-time preys_reactiontime_min + random (preys_reactiontime_max - preys_reactiontime_min)
+    set cooldown-time preys_cooldowntime_min + random (preys_cooldowntime_max - preys_cooldowntime_min)
 
     set shape "sheep"
   ]
@@ -249,16 +267,16 @@ to setup-prey-groups
 
 end
 
-to generate-recent-tracks
-
-  let trackPregenerationPeriodInMinutes track-pregeneration-period * 60 ;;; hours -> minutes
-
-  repeat trackPregenerationPeriodInMinutes
-  [
-    ask preys [ update-prey ]
-  ]
-
-end
+;to generate-recent-tracks
+;
+;  let trackPregenerationPeriodInMinutes track-pregeneration-period * 60 ;;; hours -> minutes
+;
+;  repeat trackPregenerationPeriodInMinutes
+;  [
+;    ask preys [ update-prey ]
+;  ]
+;
+;end
 
 to setup-hunting-party
 
@@ -272,6 +290,9 @@ to setup-hunting-party
       set time-to-exhaustion hunters_tte_min + random (hunters_tte_max - hunters_tte_min)
       set time-to-exhaustion time-to-exhaustion * 60 ; convert minutes to seconds
       set reaction-time hunters_reactiontime_min + random (hunters_reactiontime_max - hunters_reactiontime_min)
+      set cooldown-time hunters_cooldowntime_min + random (hunters_cooldowntime_max - hunters_cooldowntime_min)
+
+      set following-track false
 
       set shape "person"
     ]
@@ -283,6 +304,7 @@ to initialise-perceptions
 
   ask turtles
   [
+    set alert false
     set hunters-in-sight (turtle-set)
     set preys-in-sight (turtle-set)
 
@@ -293,48 +315,232 @@ end
 
 to initialise-perception-links
 
-  create-links-to other hunters [ set color red set hidden? true ]
-  create-links-to other preys [ set color yellow set hidden? true ]
+  ifelse (breed = preys)
+  [
+    create-links-to other hunters [ set color red set hidden? true ]
+    create-links-to other preys [ set color violet  set hidden? true ]
+  ]
+  [
+    create-links-to other hunters [ set color cyan set hidden? true ]
+    create-links-to other preys [ set color yellow set hidden? true ]
+  ]
 
 end
 
-to update-prey
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; GO ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-  ifelse (any? hunters-in-sight)
+to go
+
+  ask turtles
   [
-    ;; initialise reaction counter, only if not already on the run or processing a reaction
-    if (time-running = 0 and reaction-counter = 0)
-    [ set reaction-counter reaction-time ]
+    ifelse (alert)
+    [
+      ifelse (breed = preys)
+      [
+        prey-alert-move
+      ]
+      [
+        hunter-alert-move
+      ]
+    ]
+    [
+      ifelse (breed = preys)
+      [
+        prey-default-move
+      ]
+      [
+        hunter-default-move
+      ]
+    ]
+  ]
 
-    move-away-from hunters-in-sight
+  ask turtles
+  [
+    check-escape-condition
+
+    check-pause-condition
+
+    impact-vegetation
+
+    update-perception
+
+    update-alertness
+  ]
+
+  update-display
+
+  if (print-messages) [ print "second has passed." ]
+
+  tick
+
+end
+
+to prey-alert-move
+
+  let fleeing-preys preys-in-sight with [ alert and running-counter > 0 ]
+
+  ifelse (any? fleeing-preys)
+  [
+    ;;; FOLLOW FLEEING PREYS
+    move-along-with fleeing-preys
   ]
   [
-    set time-running 0
+    if (any? hunters-in-sight)
+    [
+      ;;; if seeing any hunters
+      if (print-messages) [ print (word "prey " who " sees hunter" ([who] of hunters-in-sight)) ]
 
-    prey-baseline-behaviour
+      ifelse (reaction-counter > 0)
+      [
+        if (print-messages) [ print (word "thinking... " reaction-counter " secs to reaction") ]
+        ;;; PROCESS REACTION
+        set reaction-counter reaction-counter - 1
+      ]
+      [
+        ;;; FLEE
+        move-away-from hunters-in-sight
+      ]
+    ]
+    ;;; else, STAY ALERT
   ]
 
-  if (count [neighbors4] of patch-here < 4)
+end
+
+to hunter-alert-move
+
+  ifelse (any? preys-in-sight with [alert])
   [
-    print (word "Prey " who " and group " group_id " escaped from hunting area")
+    let alerted-preys preys-in-sight with [alert]
+
+    ifelse (min [distance myself] of alerted-preys < max-shooting-distance)
+    [
+      ;;; SHOOT and/or PURSUE
+    ]
+    [
+      ;;; DESIST
+    ]
+  ]
+  [
+    ;;; APPROACH
+  ]
+
+end
+
+to prey-default-move
+
+  ;;; reset running-counter (default assumed not to be "effortless")
+  set running-counter 0
+
+  let moving false
+
+  let moveDistance 0
+
+  ;; set the default distance the turtle moves as the minimum
+  let speed preys_speed_min
+
+  ;;; *Define target heading* ;;;
+
+  ;;; First priority: staying in an attractive patch (or moving out from unattractive ones)
+
+  ;;; get a relative measure of how attractive is the current patch
+  let patch-pull 100 * ([prey-attraction] of patch-here) / prey-attraction-max
+
+  if (random-float 100 > patch-pull)
+  [
+    ;;; Second priority: keeping the group together
+    ;;; NOTE: checks if all group members are in sight and, if so, head towards the closest one
+    let myGroupId group_id
+    let groupMembers other preys with [group_id = myGroupId]
+    let groupMembersNotInSight groupMembers with [not presence-detected-by myself]
+    if (count groupMembers > 0 and count groupMembers = count groupMembersNotInSight)
+    [
+      face min-one-of groupMembersNotInSight [distance myself]
+    ]
+
+    rt (- 30 + random 60) ;;; add random direction biased by default heading
+
+    set moving true
+  ]
+
+  ;;; *Move towards target heading* ;;;
+
+  if (moving)
+  [
+    ;;; keep track of the target heading
+    let targetHeading heading
+
+    set MoveDistance (get-speed-in-patch speed patch-here)
+
+    set heading (get-best-route-heading targetHeading moveDistance)
+
+    fd MoveDistance
+  ]
+
+end
+
+to hunter-default-move
+
+  ;;; reset running-counter (default assumed not to be "effortless")
+  set running-counter 0
+
+  ifelse (following-track)
+  [
+    ;;; FOLLOW TRACK
+  ]
+  [
+    ;;; SEARCH
+  ]
+
+end
+
+to check-escape-condition
+
+  if (breed = preys and count [neighbors4] of patch-here < 4)
+  [
+    if (print-messages) [ print (word "Prey " who " and group " group_id " escaped from hunting area") ]
     ask other preys with [group_id = [group_id] of myself] [ die ]
     die
   ]
 
-  if (time-running = time-to-exhaustion)
+end
+
+to check-pause-condition
+
+  ifelse (running-counter = time-to-exhaustion)
   [
-    ;;; exhasted
-    ;;; TODO: time of recovery greater than 1 tick
-    set time-running 0
+    ;;; exhasted, starts cooling down
+    set cooldown-counter cooldown-time
+
+    set running-counter 0
+  ]
+  [
+    if (cooldown-counter > 0)
+    [
+      set cooldown-counter cooldown-counter - 1
+    ]
   ]
 
-  update-perception
 
 end
 
-to update-hunter
+to impact-vegetation
 
-  ; move-towards preys-in-sight
+  let obstacleDamage obstacle-damage * [height] of self
+  let trackMarkProbability track-mark-probability * 100 * [height] of self
+
+  ask patch-here
+  [
+    ;;; clear vegetation obstacles
+    set obstacle max (list 0 (obstacle - obstacleDamage))
+
+    ;;; create mark, spurr, track
+    if (trackMarkProbability > random-float 100)
+    [
+      set track fput myself track
+    ]
+  ]
 
 end
 
@@ -342,15 +548,57 @@ to update-perception
 
   let me self
 
-  ask my-out-links [ set hidden? true ]
-
   set hunters-in-sight other hunters with [presence-detected-by me]
   set preys-in-sight other preys with [presence-detected-by me]
+
+  ask my-out-links [ set hidden? true ]
 
   ask hunters-in-sight [ ask in-link-from me [ set hidden? false ] ]
   ask preys-in-sight [ ask in-link-from me [ set hidden? false ] ]
 
 end
+
+to update-alertness
+
+  let sighting false
+  let message false
+
+  ifelse (breed = preys)
+  [
+    set sighting (any? hunters-in-sight)
+    set message (any? preys-in-sight with [alert])
+  ]
+  [
+    set sighting (any? preys-in-sight)
+    set message (any? hunters-in-sight with [alert])
+  ]
+
+  let newAlert (sighting or message)
+
+  ;;; trigger reaction counter if alert, only if not previously alert
+  if (newAlert and not alert)
+  [
+    set reaction-counter reaction-time
+
+    if (sighting)
+    [
+      ifelse (breed = preys)
+      [
+        set prey-hunter-sightings prey-hunter-sightings + count hunters-in-sight
+      ]
+      [
+        set hunter-prey-sightings hunter-prey-sightings + count preys-in-sight
+      ]
+    ]
+  ]
+
+  set alert newAlert
+
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; AUXILIARY PROCEDURES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 to-report presence-detected-by [ theOther ]
 
@@ -362,24 +610,31 @@ to-report presence-detected-by [ theOther ]
 
   ask theOther
   [
-    face me
-    let myLineOfSight line-of-sight
-    set response member? ([patch-here] of me) myLineOfSight
+    let currentHeading heading
+    ;;; NOTE: line-of-sight modifies theOther's heading, so we keep its current value and recover it later
+
+    let lineOfSightFromTheOtherToMe line-of-sight-with me
+    set response member? ([patch-here] of me) lineOfSightFromTheOtherToMe
+
+    set heading currentHeading
   ]
 
   report response
 
 end
 
-to-report line-of-sight
+to-report line-of-sight-with [ anotherTurtle ]
 
   ;;; a ray casting algorithm that takes into account:
   ;;; 1. elevation (ground level),
   ;;; 2. height of turtles
   ;;; 3. height of obstacles
+
   let visiblePatches (patch-set)
 
   let vantagePointHeight elevation + height
+
+  face anotherTurtle
 
   let lastDist 1
   let lastPatch patch-here
@@ -439,103 +694,72 @@ to move-away-from [ someTurtles ]
 
   ;;; make it acceptable that someTurtle is given as a single turtle
   set someTurtles (turtle-set someTurtles)
-  print (word "prey " who " sees hunter" ([who] of someTurtles))
-  repeat tick-length-in-seconds
+
+
+  if (print-messages) [ print "running away..." ]
+
+  ;; if reaction time has passed...
+  if (cooldown-counter = 0) ;running-counter < time-to-exhaustion)
   [
-    ifelse (reaction-counter > 0)
+    if (print-messages) [ print "... and not exhausted." ]
+    ;; ... and the turtle is not recovering after exhaustion
+    ;; Find the nearest turtle
+    let closestTurtle min-one-of someTurtles [distance myself]
+
+    if (print-messages) [ print (word "distance before: " (distance closestTurtle)) ]
+
+    ;; Modulate speed according to distance and safe-distance
+    let maxSpeed preys_speed_min
+    if ([distance myself] of closestTurtle < preys_safe-distance)
     [
-      print (word "thinking... " reaction-counter " secs to reaction")
-        set reaction-counter reaction-counter - 1
+      set maxSpeed preys_speed_max
     ]
-    [
-      print "running away..."
-      ;; if reaction time has passed...
-      if (time-running < time-to-exhaustion)
-      [
-        print "... and not exhausted."
-        ;; ... and the turtle is not already exhausted
-        ;; Find the nearest turtle
-        let closestTurtle min-one-of someTurtles [distance myself]
-        print (word "distance before: " (distance closestTurtle))
-        ;; Modulate spped according to distance and safe-distance
-        let maxSpeed preys_speed_min
-        if ([distance myself] of closestTurtle < preys_safe-distance)
-        [
-          set maxSpeed preys_speed_max
-        ]
 
-        ;; Set the distance the turtle moves as the maximum
-        let moveDistance (get-speed-in-patch maxSpeed patch-here)
+    ;; Set the distance the turtle moves as the maximum
+    let moveDistance (get-speed-in-patch maxSpeed patch-here)
 
-        let oppositeHeading towards closestTurtle - 180
-        set heading (get-best-route-heading oppositeHeading moveDistance)
+    let oppositeHeading towards closestTurtle - 180
+    set heading (get-best-route-heading oppositeHeading moveDistance)
 
-        fd MoveDistance
-        print (word "distance after: " (distance closestTurtle))
-        impact-vegetation
+    fd MoveDistance
+    if (print-messages) [ print (word "distance after: " (distance closestTurtle)) ]
 
-        ;;; account for exertion
-        set time-running time-running + 1
-      ]
-    ]
+    ;;; account for exertion
+    set running-counter running-counter + 1
   ]
-  print "minute has passed."
 
 end
 
-to prey-baseline-behaviour
+to move-along-with [ someTurtles ]
 
-  let moving false
+  ;;; make it acceptable that someTurtle is given as a single turtle
+  set someTurtles (turtle-set someTurtles)
 
-  let moveDistance 0
-
-  ;; set the default distance the turtle moves as the minimum
-  let speed preys_speed_min
-
-  ;;; *Define target heading* ;;;
-
-  ;;; First priority: staying in an attractive patch (or moving out from unattractive ones)
-
-  ;;; get a relative measure of how attractive is the current patch
-  let patch-pull 100 * ([prey-attraction] of patch-here) / prey-attraction-max
-
-  if (random-float 100 > patch-pull)
+  if (print-messages)
   [
-    ;;; Second priority: keeping the group together
-    ;;; NOTE: checks if all group members are in sight and, if so, head towards the closest one
-    let myGroupId group_id
-    let groupMembers other preys with [group_id = myGroupId]
-    let groupMembersNotInSight groupMembers with [not presence-detected-by myself]
-    if (count groupMembers > 0 and count groupMembers = count groupMembersNotInSight)
-    [
-      face min-one-of groupMembersNotInSight [distance myself]
-    ]
-
-    rt (- 30 + random 60) ;;; add random direction biased by default heading
-
-    set moving true
+    print (word "prey " who " sees prey" ([who] of someTurtles) " fleeing.")
+    print "running along..."
   ]
 
-  ;;; *Move towards target heading* ;;;
-
-  ifelse (moving)
+  if (cooldown-counter = 0) ;running-counter < time-to-exhaustion)
   [
-    ;;; keep track of the target heading
-    let targetHeading heading
+    if (print-messages) [ print "... and not exhausted." ]
+    ;; ... and the turtle is not recovering after exhaustion
+    ;; Find the nearest turtle
+    let closestTurtle min-one-of someTurtles [distance myself]
+    if (print-messages) [ print (word "distance before: " (distance closestTurtle)) ]
 
-    repeat tick-length-in-seconds
-    [
-      set MoveDistance (get-speed-in-patch speed patch-here)
+    ;; Set the distance the turtle moves as the maximum
+    let moveDistance (get-speed-in-patch preys_speed_max patch-here)
 
-      set heading (get-best-route-heading targetHeading moveDistance)
+    let fleeingHeading [heading] of closestTurtle
+    set heading (get-best-route-heading fleeingHeading moveDistance)
 
-      fd MoveDistance
+    fd MoveDistance
+    if (print-messages) [ print (word "distance after: " (distance closestTurtle)) ]
 
-      impact-vegetation
-    ]
-  ]
-  [
-    repeat tick-length-in-seconds [ impact-vegetation ]
+    ;;; account for exertion
+    set running-counter running-counter + 1
   ]
 
 end
@@ -631,24 +855,7 @@ to-report existing-patch-at-heading-and-distance [ aHeading aDistance ]
 
 end
 
-to impact-vegetation
 
-  let obstacleDamage obstacle-damage * [height] of self
-  let trackMarkProbability track-mark-probability * 100 * [height] of self
-
-  ask patch-here
-  [
-    ;;; clear vegetation obstacles
-    set obstacle max (list 0 (obstacle - obstacleDamage))
-
-    ;;; create mark, spurr, track
-    if (trackMarkProbability > random-float 100)
-    [
-      set track fput myself track
-    ]
-  ]
-
-end
 
 to update-display
 
@@ -713,13 +920,19 @@ to-report convert-kmperh-to-patchpersec [ kmperh ]
   report patchpersec
 end
 
-to-report convert_ticks_to_hours
+to-report convert-ticks-to-hours
 
-  report floor (tick-length-in-seconds * ticks / 3600)
+  report floor (ticks / 3600)
 
 end
 
-to-report convert_ticks_to_remainder_minutes
+to-report convert-ticks-to-remainder-minutes
+
+  report floor (ticks / 60)
+
+end
+
+to-report convert-ticks-to-remainder-seconds
 
   report ticks mod 60
 
@@ -830,7 +1043,7 @@ INPUTBOX
 99
 158
 SEED
-0.0
+1.0
 1
 0
 Number
@@ -909,23 +1122,23 @@ agent-scale
 Number
 
 MONITOR
-63
-10
-120
-55
+30
+11
+87
+56
 hours
-convert_ticks_to_hours
+convert-ticks-to-hours
 17
 1
 11
 
 MONITOR
-119
-10
-169
-55
+86
+11
+136
+56
 minutes
-convert_ticks_to_remainder_minutes
+convert-ticks-to-remainder-minutes
 17
 1
 11
@@ -1178,7 +1391,7 @@ minutes
 HORIZONTAL
 
 SLIDER
-627
+634
 584
 848
 617
@@ -1193,7 +1406,7 @@ seconds
 HORIZONTAL
 
 SLIDER
-626
+634
 617
 848
 650
@@ -1300,7 +1513,7 @@ HORIZONTAL
 SLIDER
 854
 584
-1066
+1069
 617
 par_preys_reactiontime_min
 par_preys_reactiontime_min
@@ -1309,13 +1522,13 @@ par_preys_reactiontime_max
 60.0
 1
 1
-seconds
+secs
 HORIZONTAL
 
 SLIDER
 854
 619
-1066
+1069
 652
 par_preys_reactiontime_max
 par_preys_reactiontime_max
@@ -1324,7 +1537,7 @@ par_preys_reactiontime_min
 100.0
 1
 1
-seconds
+secs
 HORIZONTAL
 
 SLIDER
@@ -1336,7 +1549,7 @@ par_num-preys
 par_num-preys
 0
 100
-50.0
+15.0
 1
 1
 preys
@@ -1351,7 +1564,7 @@ par_preys_group_max_size
 par_preys_group_max_size
 0
 100
-10.0
+6.0
 1
 1
 preys/group
@@ -1393,6 +1606,107 @@ par_preys_safe-distance
 1
 m
 HORIZONTAL
+
+SWITCH
+36
+317
+176
+350
+print-messages
+print-messages
+1
+1
+-1000
+
+MONITOR
+137
+10
+195
+55
+seconds
+convert-ticks-to-remainder-seconds
+17
+1
+11
+
+SLIDER
+854
+656
+1069
+689
+hunters_cooldowntime_min
+hunters_cooldowntime_min
+0
+hunters_cooldowntime_max
+400.0
+1
+1
+secs
+HORIZONTAL
+
+SLIDER
+855
+692
+1070
+725
+hunters_cooldowntime_max
+hunters_cooldowntime_max
+hunters_cooldowntime_min
+20 * 60
+800.0
+1
+1
+secs
+HORIZONTAL
+
+SLIDER
+630
+658
+849
+691
+preys_cooldowntime_min
+preys_cooldowntime_min
+0
+preys_cooldowntime_max
+200.0
+1
+1
+secs
+HORIZONTAL
+
+SLIDER
+630
+693
+850
+726
+preys_cooldowntime_max
+preys_cooldowntime_max
+preys_cooldowntime_min
+20 * 60
+600.0
+1
+1
+secs
+HORIZONTAL
+
+PLOT
+210
+580
+623
+730
+Sightings
+NIL
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+true
+"" ""
+PENS
+"preys" 1.0 0 -1184463 true "" "plot prey-hunter-sightings"
+"hunters" 1.0 0 -2674135 true "" "plot hunter-prey-sightings"
 
 @#$#@#$#@
 ## WHAT IS IT?
