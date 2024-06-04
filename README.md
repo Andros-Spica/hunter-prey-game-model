@@ -3,11 +3,31 @@ Repository for simulation models about traditional bow-and-arrow hunting, create
 
 # Design concepts
 
-- Phases of hunting: planning, tracking, spotting, pursuing, shooting, retrieving
 - Based on empirical and ethnographic studies of traditional bow-and-arrow hunting with poisonous arrows.
 - Agent-based modelling
 
+Hunting phases: 
+- planning 
+- hunting bout – modes:
+  - searching
+  - tracking 
+  - spotting/approaching 
+  - pursuing 
+  - shooting 
+- retrieval/butchering/processing
+
+Other practices affecting hunting success (Niche construction) 
+- Fire management
+
 ## The Hunting Bout
+
+The Hunting bout:
+- Sequence of modes
+- Often not linear (e.g., interrupted tracks, pursue not feasible, etc)
+- Ends with: 
+  - a successful shot, or
+  - when hunters desist, considering success to be unlikely 
+- Scale of seconds to hours, and metres to kilometres
 - The hunting bout contains phases from tracking to shooting, given that the sequence is often not a linear progression (e.g., tracking leading to dead ends, pursue not possible, etc).
 - Opposed goals: Hunters want to shoot and kill prey, and prey wants to escape hunters unharmed.
 - A hunting bout will end if there is a successful shot, or when hunters desist, e.g. by considering that future shots will be unlikely. 
@@ -15,12 +35,37 @@ Repository for simulation models about traditional bow-and-arrow hunting, create
 - A complex game of presence, perception, stamina, speed, technology, and skill. The balance between the number of hunters for boosting perception and stealth to minimize the presence of the hunting party.
   - Hunters’ best outcome is approaching and shooting prey without first being detected.
   - Prey’s best outcome is to detect hunters before they approach or to avoid their own detection altogether in the first place.
-- Hunter and prey properties that modify (increase or decrease) presence (e.g., camouflage, stealth skill, body size, etc.), perception (e.g., sight and auditory capabilities), speed, and stamina (genetic potential and current health state).
+- Hunter and prey properties that modify (increase or decrease) presence (e.g., camouflage, stealth skill, body size, etc.), perception (e.g., sight and auditory capabilities), speed, and stamina (genetic potential and current health state).  
+- Mechanisms:
+  - Movement
+    - Prey: default (non-alert), flee (alert)
+    - Hunter: search, track, stealth approach, pursue, pause 
+  - Line-of-sight
+  - Sound propagation and detection 
+  - Smell cloud and detection (only prey)  
+- Hunter/prey properties
+  - Height (proxy of presence, e.g. body weight, camouflage, stealth)
+  - Speed (minimum and maximum)
+  - Time to exhaustion (proxy of “stamina”, maximum VO2).
+  - Reaction time (proxy of sensorial and cognitive capabilities)
+  - Group size increases both presence and perception (intrinsic trade-off)
+  - Group composition/assets: tools and skill vary between and within hunting groups, giving an important edge or disadvantage (e.g., tracking skills, stealth, strength of poison, quality of arrows, etc)
 - Hunters' technological and skill properties are more varied and may give an important edge or disadvantage depending on the composition of the hunting party. The availability and processing of stronger poison can minimise the time and effort spent on retrieving a prey’s body after a successful shot.
-- Environmental factors: terrain morphology and permeable obstacles (vegetation) affect movement (speed and stamina) and perception (line-of-sight, noises) for both hunter and prey (e.g., dense, tall bush, low spiky bush, a burned area, crunchy ground, animal paths, etc.).
-- Environmental attractors/repellers: certain elements of the landscape can direct the movement of prey, attracting (or repelling) them.
+- Environmental conditions
+  - Terrain morphology (elevation model)
+  - Ground cover
+  - Permeable obstacles (all vegetation)
+  - Prey attractors (some vegetation, water sources, shade)
+  - Prey repellers
+  - Wind intensity and direction
+  - Temperature
+  - Overarching factors: ecological zones, seasons, fire management, key fauna (elephants, non-human predators,etc)
 
 ## Planning and retrieving
 Planning and retrieving are the key phases for cooperation and tool availability within the social group of the hunter side.
 
 Group size impacts the probability of success and full retrieval and freshness of the prey’s body after a successful shot.
+
+# Details
+
+
