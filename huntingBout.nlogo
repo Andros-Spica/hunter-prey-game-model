@@ -86,11 +86,13 @@ hunters-own
   preys-in-sight
 
   follow-track-target
-  last-sighting-target
+  unseen-target-location
   approaching-target
   pursuing-target
 
   reaction-counter
+  relax-counter
+
   running-counter
   cooldown-counter
   moved-this-turn
@@ -117,9 +119,11 @@ preys-own
   hunters-in-sight
   preys-in-sight
 
-  last-sighting-target
+  unseen-target-location
 
   reaction-counter
+  relax-counter
+
   running-counter
   cooldown-counter
   moved-this-turn
@@ -248,6 +252,9 @@ to set-parameters
     pxcor > min-pxcor + 0.8 * world-width or
     pycor > min-pycor + 0.8 * world-height ] ;;; choose apatch near the edges as target point
 
+  ;;; TO-DO - better definition/representation of previous planning
+  ;;; (e.g., interesting points, attractors?, must be "economic", knowledge of area, movement patterns, wind direction of the day)
+
 end
 
 to initialise-output
@@ -299,7 +306,7 @@ to setup-prey-groups
 
     set group-leader false
 
-    set last-sighting-target nobody
+    set unseen-target-location nobody
 
     set moved-this-turn false
 
@@ -328,6 +335,7 @@ to setup-prey-groups
       ask preys with [group_id = currentID]
       [
         move-to me
+        move-to one-of neighbors ;;; shuffle initial position around group center
       ]
     ]
 
@@ -364,7 +372,7 @@ to generate-recent-tracks
     let remainingDuration duration
 
     ;;; shuffle within neighbors to emulate group distribution
-    move-to one-of neighbors
+    ;move-to one-of neighbors
 
     repeat duration
     [
@@ -405,7 +413,7 @@ to setup-hunting-party
       set cooldown-time hunters_cooldowntime_min + random (hunters_cooldowntime_max - hunters_cooldowntime_min)
 
       set follow-track-target nobody
-      set last-sighting-target nobody
+      set unseen-target-location nobody
       set approaching-target nobody
       set pursuing-target nobody
 
@@ -491,7 +499,8 @@ to go
     [
       ifelse (breed = preys)
       [
-        ifelse (last-sighting-target != nobody and distance last-sighting-target < preys_safe-distance)
+        let unseen-threat (unseen-target-location != nobody and distance unseen-target-location < preys_safe-distance)
+        ifelse (unseen-threat)
         [
           prey-memory-move
         ]
@@ -501,7 +510,8 @@ to go
 
       ]
       [
-        ifelse (last-sighting-target != nobody and last-sighting-target != patch-here)
+        let unseen-prey (unseen-target-location != nobody and unseen-target-location != patch-here)
+        ifelse (unseen-prey)
         [
           hunter-memory-move
         ]
@@ -512,10 +522,13 @@ to go
     ]
   ]
 
-  ask (turtle-set preys hunters)
+  ask preys
   [
     check-escape-condition
+  ]
 
+  ask (turtle-set preys hunters)
+  [
     check-cooldown-condition
 
     update-perception
@@ -549,7 +562,7 @@ to prey-sighting-move
     if (print-messages) [ print (word "thinking... " reaction-counter " secs to reaction") ]
 
     ;;; mark one of the patches of sightings as target (used once the reaction time has past and preys are no more in sight)
-    set last-sighting-target [patch-here] of one-of hunters-in-sight
+    set unseen-target-location [patch-here] of one-of hunters-in-sight
 
     ;;; PROCESS REACTION
     set reaction-counter reaction-counter - 1
@@ -584,7 +597,7 @@ to hunter-sighting-move
     if (print-messages) [ print (word "thinking... " reaction-counter " secs to reaction") ]
 
     ;;; mark one of the patches of sightings as target (used once the reaction time has past and preys are no more in sight)
-    set last-sighting-target [patch-here] of one-of preys-in-sight
+    set unseen-target-location [patch-here] of one-of preys-in-sight
 
     ;;; PROCESS REACTION
     set reaction-counter reaction-counter - 1
@@ -604,6 +617,8 @@ to hunter-sighting-move
         hunter-shoot (min-one-of alerted-preys [distance myself])
       ]
       [
+        ;;; TO-DO: STANDING-LIKE-A-BUSH
+
         ;;; PURSUE
         hunter-pursue (min-one-of alerted-preys [distance myself])
       ]
@@ -636,19 +651,27 @@ to hunter-shoot [ aPrey ]
     ;;; SUCCESS
     if (print-messages) [ print "success!" ]
 
-    ask aPrey
-    [
-      ;;; prey is shot
-      hatch 1
-      [ set shape "x" set size 5 set color red ]
-      stop
-    ]
-
+    ;;; keep successful hunt information
     set prey-who-got-shot aPrey
     set hunter-who-shot self
 
-    ;;; STOP condition ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-    stop
+    ;;; mark the spot
+    ask [patch-here] of aPrey
+    [
+      sprout-track-makers 1
+      [
+        ;;; prey is shot
+        set shape "x"
+        set size 5
+        set color red
+      ]
+    ]
+
+    ;;; delete the prey agent
+    ask aPrey
+    [
+      die
+    ]
   ]
   [
     ;;; FAIL
@@ -703,7 +726,7 @@ end
 to hunter-memory-move
 
   ;;; continue towards the point of last sighting
-  face last-sighting-target
+  face unseen-target-location
 
   ;;; move
   advance-with-heading-and-speed-here heading hunters_speed_min
@@ -713,7 +736,7 @@ end
 to prey-memory-move
 
   ;;; continue moving away from the point of last sighting
-  face last-sighting-target
+  face unseen-target-location
   set heading heading - 180
 
   ;;; move
@@ -723,11 +746,15 @@ end
 
 to prey-default-move
 
-  ;;; reset running-counter (default assumed not to be "effortless")
+  ;;; relaxing (alertness is decreased)
+  if (relax-counter > 0)
+  [ set relax-counter relax-counter - 1 ]
+
+  ;;; reset running-counter (default assumed to be "effortless")
   set running-counter 0
 
   ;;; forget last sighting point
-  set last-sighting-target nobody
+  set unseen-target-location nobody
 
   let moving false
 
@@ -772,6 +799,10 @@ end
 
 to hunter-default-move
 
+  ;;; relaxing (alertness is decreased)
+  if (relax-counter > 0)
+  [ set relax-counter relax-counter - 1 ]
+
   ;;; reset running-counter (default assumed to be "effortless")
   set running-counter 0
 
@@ -779,7 +810,7 @@ to hunter-default-move
   set stealth false
 
   ;;; forget last sighting point
-  set last-sighting-target nobody
+  set unseen-target-location nobody
 
   let other-tracks-index get-all-tracks-but-mine tracks
 
@@ -821,9 +852,9 @@ to-report get-all-tracks-but-mine [ tracksList ]
 
 end
 
-to check-escape-condition
+to check-escape-condition ;;; preys
 
-  if (breed = preys and count [neighbors4] of patch-here < 4)
+  if (count [neighbors4] of patch-here < 4)
   [
     if (print-messages) [ print (word "Prey " who " and group " group_id " escaped from hunting area") ]
     ask other preys with [group_id = [group_id] of myself] [ die ]
@@ -906,7 +937,9 @@ to update-alertness
     ;;; account for new prey-hunter-sightings
     if (sighting and not oldSighting)
     [
-      set reaction-counter reaction-time
+      set reaction-counter reaction-time - relax-counter
+      set relax-counter reaction-time
+
       set prey-hunter-sightings prey-hunter-sightings + count hunters-in-sight
     ]
   ]
@@ -917,7 +950,9 @@ to update-alertness
     ;;; account for new hunter-prey-sightings
     if (sighting and not oldSighting)
     [
-      set reaction-counter reaction-time
+      set reaction-counter reaction-time - relax-counter
+      set relax-counter reaction-time
+
       set hunter-prey-sightings hunter-prey-sightings + count preys-in-sight
     ]
   ]
@@ -1487,7 +1522,7 @@ INPUTBOX
 99
 158
 SEED
-5.0
+7.0
 1
 0
 Number
@@ -1688,10 +1723,10 @@ Environment
 1
 
 MONITOR
-527
-445
-616
-490
+116
+428
+205
+473
 patch-width (m)
 patch-width
 17
@@ -1982,7 +2017,7 @@ par_num-preys
 par_num-preys
 0
 100
-4.0
+15.0
 1
 1
 preys
@@ -2173,6 +2208,17 @@ par_max-shooting-distance
 1
 m
 HORIZONTAL
+
+MONITOR
+99
+473
+205
+518
+world-width (Km)
+world-width * patch-width * 1E-3
+17
+1
+11
 
 @#$#@#$#@
 ## WHAT IS IT?

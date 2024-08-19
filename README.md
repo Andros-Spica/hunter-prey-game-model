@@ -68,4 +68,14 @@ Group size impacts the probability of success and full retrieval and freshness o
 
 # Details
 
+Hunting bout: overall cycle (per second)
+![Hunting bout: overall cycle (per second)](docs/behaviour-diagrams_cycle.png)
 
+Hunting bout: line of sight with permeable obstacles (i.e. vegetation)
+![Hunting bout: line of sight with permeable obstacles (i.e. vegetation)](docs/line-of-sight.png)
+
+Hunting bout: alertness, reaction and relaxation
+![Hunting bout: alertness, reaction and relaxation](docs/alertness.png)
+
+Hunting bout: movement modes (states with transitions)
+![Hunting bout: alertness, reaction and relaxation](docs/behaviour-diagrams-state.png)
