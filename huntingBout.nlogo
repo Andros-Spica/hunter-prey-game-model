@@ -213,10 +213,10 @@ to set-parameters
   set num-hunters par_num-hunters
   set hunters_height_min par_hunters_height_min ; meters
   set hunters_height_max par_hunters_height_max
-  set hunters_height_stealth 1 ; metre
+  set hunters_height_stealth par_hunters_height_stealth ; metre
   set hunters_speed_min convert-kmperh-to-patchpersec par_hunters_speed_min ; patch width (m) per second
   set hunters_speed_max convert-kmperh-to-patchpersec par_hunters_speed_max
-  set hunters_speed_stealth hunters_speed_min * 0.5
+  set hunters_speed_stealth hunters_speed_min * (par_hunters_speed_stealth / 100)
   set hunters_tte_min par_hunters_tte_min ; minutes
   set hunters_tte_max par_hunters_tte_max
   set hunters_reactiontime_min par_hunters_reactiontime_min
@@ -386,10 +386,17 @@ to generate-recent-tracks
 
       if (count neighbors < 8) [ die ] ;;; delete once it reaches the edges of the area
 
-      rt (- 30 + random 60) ;;; add random direction biased by default heading
+      ;;; get a relative measure of how attractive is the current patch
+      let patch-pull 0
+      if (prey-attraction-max > 0)
+      [ set patch-pull 100 * ([prey-attraction] of patch-here) / prey-attraction-max ]
 
-      fd 1
+      if (random-float 100 > patch-pull)
+      [
+        rt (- 30 + random 60) ;;; add random direction biased by default heading
 
+        fd 1
+      ]
       set remainingDuration remainingDuration - 1
     ]
 
@@ -407,6 +414,7 @@ to setup-hunting-party
     sprout-hunters num-hunters
     [
       set height hunters_height_min + random-float (hunters_height_max - hunters_height_min)
+      set stealth-height height * (hunters_height_stealth / 100)
       set time-to-exhaustion hunters_tte_min + random (hunters_tte_max - hunters_tte_min)
       set time-to-exhaustion time-to-exhaustion * 60 ; convert minutes to seconds
       set reaction-time hunters_reactiontime_min + random (hunters_reactiontime_max - hunters_reactiontime_min)
@@ -448,12 +456,12 @@ to initialise-perception-links
 
   ifelse (breed = preys)
   [
-    create-links-to other hunters [ set color red set hidden? true ]
-    create-links-to other preys [ set color violet  set hidden? true ]
+    create-links-from other hunters [ set color red set hidden? true ]
+    create-links-from other preys [ set color violet  set hidden? true ]
   ]
   [
-    create-links-to other hunters [ set color cyan set hidden? true ]
-    create-links-to other preys [ set color yellow set hidden? true ]
+    create-links-from other hunters [ set color cyan set hidden? true ]
+    create-links-from other preys [ set color yellow set hidden? true ]
   ]
 
 end
@@ -614,12 +622,14 @@ to hunter-sighting-move
       ifelse (min [distance myself] of alerted-preys < max-shooting-distance)
       [
         ;;; SHOOT
+        save-hunting-mode "SHOOT"
         hunter-shoot (min-one-of alerted-preys [distance myself])
       ]
       [
         ;;; TO-DO: STANDING-LIKE-A-BUSH
 
         ;;; PURSUE
+        save-hunting-mode "PURSUE"
         hunter-pursue (min-one-of alerted-preys [distance myself])
       ]
 
@@ -631,6 +641,7 @@ to hunter-sighting-move
     ]
     [
       ;;; STEALTH APPROACH
+      save-hunting-mode "APPROACH-STEALTH"
       hunter-approach (min-one-of preys-in-sight [distance myself])
     ]
   ]
@@ -725,6 +736,8 @@ end
 
 to hunter-memory-move
 
+  save-hunting-mode "APPROACH-BLIND"
+
   ;;; continue towards the point of last sighting
   face unseen-target-location
 
@@ -818,6 +831,7 @@ to hunter-default-move
   ifelse (length other-tracks-index > 0)
   [
     ;;; TRACKING
+    save-hunting-mode "TRACK"
     ;;; get the most recent track
     set follow-track-target (item 0 (item 0 other-tracks-index))
     ;;; and face it
@@ -825,6 +839,7 @@ to hunter-default-move
   ]
   [
     ;;; SEARCHING
+    save-hunting-mode "SEARCH"
     set follow-track-target nobody ;;; erase reference to last track followed? (no consequence if the most recent track is always followed)
     ;;; or continue path towards target-point
     face target-point
@@ -1272,6 +1287,20 @@ to-report existing-patch-at-heading-and-distance [ aHeading aDistance ]
 
 end
 
+to save-hunting-mode [ huntingModeName ]
+
+  let lastHuntingModeName ""
+  if (length hunting-mode-series > 0)
+  [ set lastHuntingModeName item 0 (last hunting-mode-series) ]
+
+  ;;; register only if changed
+  if (huntingModeName != lastHuntingModeName)
+  [
+    set hunting-mode-series lput (list huntingModeName ticks) hunting-mode-series
+  ]
+
+end
+
 to-report find-element [elementToFind listOfLists]
   ;;; procedure generated with Chat GPT-4o:
   ;;; "my Netlogo Assistant" By Stefano Cacciaguerra
@@ -1479,10 +1508,10 @@ NIL
 1
 
 PLOT
-1067
-283
-1376
-433
+1074
+173
+1383
+323
 height
 height (m)
 NIL
@@ -1498,10 +1527,10 @@ PENS
 "hunters" 1.0 1 -5298144 true "set-plot-pen-interval 0.1\nhistogram [height] of hunters" "set-plot-pen-interval 0.1\nhistogram [height] of hunters"
 
 PLOT
-1067
-433
-1377
-583
+1075
+328
+1385
+478
 time to exhaustion (TTE)
 TTE (seconds)
 NIL
@@ -1522,7 +1551,7 @@ INPUTBOX
 99
 158
 SEED
-7.0
+35579.0
 1
 0
 Number
@@ -1535,13 +1564,13 @@ CHOOSER
 display-mode
 display-mode
 "elevation" "obstacle" "elevation+obstacle" "prey-attraction" "tracks"
-4
+1
 
 BUTTON
-41
-273
-172
-306
+42
+252
+173
+285
 NIL
 update-display
 NIL
@@ -1555,10 +1584,10 @@ NIL
 1
 
 PLOT
-211
-427
-623
-577
+1013
+18
+1382
+168
 obstacles
 patch obstacle height (m)
 NIL
@@ -1623,10 +1652,10 @@ convert-ticks-to-remainder-minutes
 11
 
 SLIDER
-632
-72
-944
-105
+630
+33
+942
+66
 par_prey-attractor-probability
 par_prey-attractor-probability
 0
@@ -1638,10 +1667,10 @@ par_prey-attractor-probability
 HORIZONTAL
 
 SLIDER
-632
-105
-944
-138
+630
+66
+942
+99
 par_init-obstacle-scale
 par_init-obstacle-scale
 0
@@ -1654,9 +1683,9 @@ HORIZONTAL
 
 SLIDER
 638
-314
+335
 862
-347
+368
 par_starting-point-buffer-distance
 par_starting-point-buffer-distance
 0
@@ -1668,25 +1697,25 @@ Km
 HORIZONTAL
 
 SLIDER
-947
-72
-1329
-105
+630
+129
+1012
+162
 par_obstacle-damage
 par_obstacle-damage
 0
 1
-0.1
+0.01
 0.01
 1
 m height (obstacle) / 1 m height (body) * 1 sec
 HORIZONTAL
 
 SLIDER
-947
-106
-1329
-139
+630
+163
+1012
+196
 par_track-mark-probability
 par_track-mark-probability
 0
@@ -1698,10 +1727,10 @@ par_track-mark-probability
 HORIZONTAL
 
 SLIDER
-632
-137
-944
-170
+630
+98
+942
+131
 par_track-pregeneration-period
 par_track-pregeneration-period
 0
@@ -1713,20 +1742,20 @@ hours
 HORIZONTAL
 
 TEXTBOX
-634
-49
-784
-67
+632
+10
+782
+28
 Environment
 14
 0.0
 1
 
 MONITOR
-116
-428
-205
-473
+96
+348
+185
+393
 patch-width (m)
 patch-width
 17
@@ -1734,10 +1763,10 @@ patch-width
 11
 
 SLIDER
-638
-212
-830
-245
+635
+224
+827
+257
 par_num-hunters
 par_num-hunters
 0
@@ -1749,20 +1778,20 @@ hunters
 HORIZONTAL
 
 TEXTBOX
-641
-193
-791
-211
+638
+205
+788
+223
 Hunters
 14
 0.0
 1
 
 TEXTBOX
-881
-192
-1031
-210
+878
+204
+1028
+222
 Preys
 14
 0.0
@@ -1770,9 +1799,9 @@ Preys
 
 SLIDER
 641
-353
+374
 832
-386
+407
 par_hunters_height_min
 par_hunters_height_min
 1
@@ -1785,9 +1814,9 @@ HORIZONTAL
 
 SLIDER
 640
-387
+408
 831
-420
+441
 par_hunters_height_max
 par_hunters_height_max
 par_hunters_height_min
@@ -1799,10 +1828,10 @@ m
 HORIZONTAL
 
 SLIDER
-641
-430
-832
-463
+643
+484
+834
+517
 par_hunters_speed_min
 par_hunters_speed_min
 1
@@ -1814,10 +1843,10 @@ km/h
 HORIZONTAL
 
 SLIDER
-640
-467
-833
-500
+642
+521
+835
+554
 par_hunters_speed_max
 par_hunters_speed_max
 par_hunters_speed_min
@@ -1829,10 +1858,10 @@ km/h
 HORIZONTAL
 
 SLIDER
-645
-509
-835
-542
+643
+602
+833
+635
 par_hunters_tte_min
 par_hunters_tte_min
 1
@@ -1844,10 +1873,10 @@ minutes
 HORIZONTAL
 
 SLIDER
-645
-543
-836
-576
+643
+636
+834
+669
 par_hunters_tte_max
 par_hunters_tte_max
 par_hunters_tte_min
@@ -1859,10 +1888,10 @@ minutes
 HORIZONTAL
 
 SLIDER
-634
-584
-848
-617
+632
+677
+846
+710
 par_hunters_reactiontime_min
 par_hunters_reactiontime_min
 1
@@ -1874,10 +1903,10 @@ seconds
 HORIZONTAL
 
 SLIDER
-634
-617
-848
-650
+632
+710
+846
+743
 par_hunters_reactiontime_max
 par_hunters_reactiontime_max
 par_hunters_reactiontime_min
@@ -1890,9 +1919,9 @@ HORIZONTAL
 
 SLIDER
 869
-351
+375
 1060
-384
+408
 par_preys_height_min
 par_preys_height_min
 1
@@ -1905,9 +1934,9 @@ HORIZONTAL
 
 SLIDER
 869
-385
+409
 1060
-418
+442
 par_preys_height_max
 par_preys_height_max
 par_preys_height_min
@@ -1919,10 +1948,10 @@ m
 HORIZONTAL
 
 SLIDER
-869
-430
-1062
-463
+871
+484
+1064
+517
 par_preys_speed_min
 par_preys_speed_min
 1
@@ -1934,10 +1963,10 @@ km/h
 HORIZONTAL
 
 SLIDER
-869
-464
-1062
-497
+871
+518
+1064
+551
 par_preys_speed_max
 par_preys_speed_max
 par_preys_speed_min
@@ -1949,10 +1978,10 @@ km/h
 HORIZONTAL
 
 SLIDER
-869
-507
-1062
-540
+867
+600
+1060
+633
 par_preys_tte_min
 par_preys_tte_min
 1
@@ -1964,10 +1993,10 @@ minutes
 HORIZONTAL
 
 SLIDER
-869
-542
-1062
-575
+867
+635
+1060
+668
 par_preys_tte_max
 par_preys_tte_max
 par_preys_tte_min
@@ -1979,10 +2008,10 @@ minutes
 HORIZONTAL
 
 SLIDER
-854
-584
-1069
-617
+852
+677
+1067
+710
 par_preys_reactiontime_min
 par_preys_reactiontime_min
 1
@@ -1994,10 +2023,10 @@ secs
 HORIZONTAL
 
 SLIDER
-854
-619
-1069
-652
+852
+712
+1067
+745
 par_preys_reactiontime_max
 par_preys_reactiontime_max
 par_preys_reactiontime_min
@@ -2009,10 +2038,10 @@ secs
 HORIZONTAL
 
 SLIDER
-871
-213
-1061
-246
+868
+225
+1058
+258
 par_num-preys
 par_num-preys
 0
@@ -2024,25 +2053,25 @@ preys
 HORIZONTAL
 
 SLIDER
-831
-245
-1064
-278
+833
+266
+1066
+299
 par_preys_group_max_size
 par_preys_group_max_size
 0
 100
-6.0
+5.0
 1
 1
 preys/group
 HORIZONTAL
 
 MONITOR
-635
-243
-723
-288
+637
+259
+725
+304
 NIL
 target-point
 17
@@ -2050,10 +2079,10 @@ target-point
 11
 
 SWITCH
-36
-237
-181
-270
+42
+209
+187
+242
 display-target-point
 display-target-point
 0
@@ -2061,10 +2090,10 @@ display-target-point
 -1000
 
 SLIDER
-846
-280
-1064
-313
+848
+301
+1066
+334
 par_preys_safe-distance
 par_preys_safe-distance
 1
@@ -2076,10 +2105,10 @@ m
 HORIZONTAL
 
 SWITCH
-36
-317
-176
-350
+38
+293
+178
+326
 print-messages
 print-messages
 0
@@ -2098,10 +2127,10 @@ convert-ticks-to-remainder-seconds
 11
 
 SLIDER
-631
-654
-849
-687
+629
+747
+847
+780
 par_hunters_cooldowntime_min
 par_hunters_cooldowntime_min
 0
@@ -2113,10 +2142,10 @@ secs
 HORIZONTAL
 
 SLIDER
-632
-690
-851
-723
+630
+783
+849
+816
 par_hunters_cooldowntime_max
 par_hunters_cooldowntime_max
 par_hunters_cooldowntime_min
@@ -2128,10 +2157,10 @@ secs
 HORIZONTAL
 
 SLIDER
-851
-654
-1069
-687
+849
+747
+1067
+780
 par_preys_cooldowntime_min
 par_preys_cooldowntime_min
 0
@@ -2143,10 +2172,10 @@ secs
 HORIZONTAL
 
 SLIDER
-851
-689
-1070
-722
+849
+782
+1068
+815
 par_preys_cooldowntime_max
 par_preys_cooldowntime_max
 par_preys_cooldowntime_min
@@ -2158,12 +2187,12 @@ secs
 HORIZONTAL
 
 PLOT
-210
-580
-623
-730
+211
+425
+624
+575
 Sightings
-NIL
+seconds
 NIL
 0.0
 10.0
@@ -2173,16 +2202,16 @@ true
 true
 "" ""
 PENS
-"preys" 1.0 0 -1184463 true "" "plot prey-hunter-sightings"
-"hunters" 1.0 0 -2674135 true "" "plot hunter-prey-sightings"
+"preys->hunters" 1.0 0 -1184463 true "" "plot prey-hunter-sightings"
+"hunters->preys" 1.0 0 -2674135 true "" "plot hunter-prey-sightings"
 
 PLOT
-209
-732
-621
-882
+210
+577
+622
+727
 Tracks
-NIL
+seconds
 NIL
 0.0
 10.0
@@ -2196,9 +2225,9 @@ PENS
 
 SLIDER
 637
-280
+301
 850
-313
+334
 par_max-shooting-distance
 par_max-shooting-distance
 10
@@ -2210,15 +2239,45 @@ m
 HORIZONTAL
 
 MONITOR
-99
-473
-205
-518
+79
+393
+185
+438
 world-width (Km)
 world-width * patch-width * 1E-3
 17
 1
 11
+
+SLIDER
+635
+445
+878
+478
+par_hunters_height_stealth
+par_hunters_height_stealth
+0
+100
+50.0
+1
+1
+% of height
+HORIZONTAL
+
+SLIDER
+628
+556
+882
+589
+par_hunters_speed_stealth
+par_hunters_speed_stealth
+0
+100
+50.0
+1
+1
+% of min speed
+HORIZONTAL
 
 @#$#@#$#@
 ## WHAT IS IT?
