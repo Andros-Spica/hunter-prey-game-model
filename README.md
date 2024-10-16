@@ -14,8 +14,7 @@ Hunting phases:
   - spotting/approaching 
   - pursuing 
   - shooting 
-- retrieval  
-- butchering/processing
+- retrieval and butchering/processing
 
 Other practices affecting hunting and foraging success (Niche construction) 
 - Fire management  
