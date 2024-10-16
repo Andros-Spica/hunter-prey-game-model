@@ -14,10 +14,12 @@ Hunting phases:
   - spotting/approaching 
   - pursuing 
   - shooting 
-- retrieval/butchering/processing
+- retrieval  
+- butchering/processing
 
-Other practices affecting hunting success (Niche construction) 
-- Fire management
+Other practices affecting hunting and foraging success (Niche construction) 
+- Fire management  
+- Monitoring and managing key non-prey species, such as elephants and large predators
 
 ## The Hunting Bout
 
@@ -28,13 +30,13 @@ The Hunting bout:
   - a successful shot, or
   - when hunters desist, considering success to be unlikely 
 - Scale of seconds to hours, and metres to kilometres
-- The hunting bout contains phases from tracking to shooting, given that the sequence is often not a linear progression (e.g., tracking leading to dead ends, pursue not possible, etc).
+The hunting bout contains phases from tracking to shooting, given that the sequence is often not a linear progression (e.g., tracking leads to dead ends, pursuit is not possible, etc.).
 - Opposed goals: Hunters want to shoot and kill prey, and prey wants to escape hunters unharmed.
-- A hunting bout will end if there is a successful shot, or when hunters desist, e.g. by considering that future shots will be unlikely. 
+A hunting bout ends if there is a successful shot or when hunters desist, e.g., by considering that future shots will be unlikely. 
 - The hunting bout develops in the scale of hours and metres.
 - A complex game of presence, perception, stamina, speed, technology, and skill. The balance between the number of hunters for boosting perception and stealth to minimize the presence of the hunting party.
   - Hunters’ best outcome is approaching and shooting prey without first being detected.
-  - Prey’s best outcome is to detect hunters before they approach or to avoid their own detection altogether in the first place.
+  Prey’s best outcome is to detect hunters before they approach or to avoid detection altogether.
 - Hunter and prey properties that modify (increase or decrease) presence (e.g., camouflage, stealth skill, body size, etc.), perception (e.g., sight and auditory capabilities), speed, and stamina (genetic potential and current health state).  
 - Mechanisms:
   - Movement
@@ -44,13 +46,12 @@ The Hunting bout:
   - Sound propagation and detection 
   - Smell cloud and detection (only prey)  
 - Hunter/prey properties
-  - Height (proxy of presence, e.g. body weight, camouflage, stealth)
+  - Height (proxy of presence, e.g., body weight, camouflage, stealth)
   - Speed (minimum and maximum)
   - Time to exhaustion (proxy of “stamina”, maximum VO2).
-  - Reaction time (proxy of sensorial and cognitive capabilities)
+  - Reaction time (proxy of sensory and cognitive capabilities)
   - Group size increases both presence and perception (intrinsic trade-off)
-  - Group composition/assets: tools and skill vary between and within hunting groups, giving an important edge or disadvantage (e.g., tracking skills, stealth, strength of poison, quality of arrows, etc)
-- Hunters' technological and skill properties are more varied and may give an important edge or disadvantage depending on the composition of the hunting party. The availability and processing of stronger poison can minimise the time and effort spent on retrieving a prey’s body after a successful shot.
+  - Group composition/assets: tools and skills vary between and within hunting groups, giving a critical edge or disadvantage (e.g., tracking skills, stealth, strength of poison, quality of arrows, etc)
 - Environmental conditions
   - Terrain morphology (elevation model)
   - Ground cover
@@ -59,12 +60,12 @@ The Hunting bout:
   - Prey repellers
   - Wind intensity and direction
   - Temperature
-  - Overarching factors: ecological zones, seasons, fire management, key fauna (elephants, non-human predators,etc)
+  - Overarching factors: ecological zones, seasons, fire management, key fauna (elephants, non-human predators, etc.)
 
-## Planning and retrieving
+## Planning, retrieving and butchering/processing
 Planning and retrieving are the critical phases for cooperation and tool availability for hunting.
 
-Group size impacts the probability of success and full retrieval and freshness of the prey’s body after a successful shot.
+Group size impacts the probability of hunting success and the probability of retrieving complete and fresh prey once shot.
 
 # Details
 
