@@ -62,7 +62,7 @@ The Hunting bout:
   - Overarching factors: ecological zones, seasons, fire management, key fauna (elephants, non-human predators,etc)
 
 ## Planning and retrieving
-Planning and retrieving are the key phases for cooperation and tool availability within the social group of the hunter side.
+Planning and retrieving are the critical phases for cooperation and tool availability for hunting.
 
 Group size impacts the probability of success and full retrieval and freshness of the prey’s body after a successful shot.
 
