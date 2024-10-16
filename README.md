@@ -78,4 +78,4 @@ Hunting bout: alertness, reaction and relaxation
 ![Hunting bout: alertness, reaction and relaxation](docs/alertness.png)
 
 Hunting bout: movement modes (states with transitions)
-![Hunting bout: alertness, reaction and relaxation](docs/behaviour-diagrams-state.png)
+![Hunting bout: movement modes](docs/behaviour-diagrams-prey-state.png)
