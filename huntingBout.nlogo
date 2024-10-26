@@ -4,7 +4,6 @@ globals
   patch-width
   ;tick-length-in-seconds
   max-perception-distance
-  max-shooting-distance
   track-maximum
 
   ;;; parameters
@@ -20,6 +19,8 @@ globals
   hunters_height_stealth
   hunters_height_min
   hunters_height_max
+  hunters_visual_acuity_min
+  hunters_visual_acuity_max
   hunters_speed_stealth
   hunters_speed_min
   hunters_speed_max
@@ -30,6 +31,10 @@ globals
   hunters_cooldowntime_min
   hunters_cooldowntime_max
 
+  max-shooting-distance
+
+  hunters_randomwalk_anglerange
+
   ;;;; preys
   num-preys
   preys_group_max_size
@@ -37,6 +42,8 @@ globals
 
   preys_height_min
   preys_height_max
+  preys_visual_acuity_min
+  preys_visual_acuity_max
   preys_speed_min
   preys_speed_max
   preys_tte_min
@@ -46,13 +53,15 @@ globals
   preys_cooldowntime_min
   preys_cooldowntime_max
 
+  preys_randomwalk_anglerange
+
   ;;;; environment
   init-obstacle-scale
   prey-attractor-probability
 
   ;;; variables
   starting-point
-  target-point
+  planned-waypoints
 
   prey-attraction-max
 
@@ -73,20 +82,22 @@ hunters-own
 [
   height
   stealth-height
+  visual_acuity
   time-to-exhaustion
   reaction-time
   cooldown-time
 
-  sighting
-  message
+  any-sighting
+  any-unseen-target
   stealth
 
   ;;; internal/private
   hunters-in-sight
   preys-in-sight
 
-  follow-track-target
   unseen-target-location
+
+  follow-track-target
   approaching-target
   pursuing-target
 
@@ -105,6 +116,7 @@ hunters-own
 preys-own
 [
   height
+  visual_acuity
   time-to-exhaustion
   reaction-time
   cooldown-time
@@ -112,8 +124,8 @@ preys-own
   group_id
   group-leader
 
-  sighting
-  message
+  any-sighting
+  any-unseen-target
 
   ;;; internal/private
   hunters-in-sight
@@ -182,13 +194,13 @@ end
 
 to set-constants
 
-  set patch-width 100 ;;; meters
+  set patch-width 50 ;;; meters
 
-  ;set tick-length-in-seconds 60 ;;; 1 tick = 1 minute
-
-  set max-perception-distance sqrt ((world-width ^ 2) + (world-height ^ 2)) ;;; measured in patches orthogonal dimensions (default: diagonal distance)
+  set max-perception-distance 1000 * 5 / patch-width ;;; patch-width unit (default: 1000 * 5 / patch-width, i.e. 5 km approximation on person standing on flat terrain on Earth)
 
   set track-maximum 5
+
+  set starting-point patch (min-pxcor + floor (world-width / 2)) (min-pycor + floor (world-height / 2))
 
 end
 
@@ -214,6 +226,8 @@ to set-parameters
   set hunters_height_min par_hunters_height_min ; meters
   set hunters_height_max par_hunters_height_max
   set hunters_height_stealth par_hunters_height_stealth ; metre
+  set hunters_visual_acuity_min par_hunters_visual_acuity_min ; % of maximum perception distance
+  set hunters_visual_acuity_max par_hunters_visual_acuity_max
   set hunters_speed_min convert-kmperh-to-patchpersec par_hunters_speed_min ; patch width (m) per second
   set hunters_speed_max convert-kmperh-to-patchpersec par_hunters_speed_max
   set hunters_speed_stealth hunters_speed_min * (par_hunters_speed_stealth / 100)
@@ -226,12 +240,16 @@ to set-parameters
 
   set max-shooting-distance par_max-shooting-distance / patch-width ;;; metres
 
+  set hunters_randomwalk_anglerange par_hunters_randomwalk_anglerange ;;; degrees
+
   ;;;; preys
   set num-preys par_num-preys
   set preys_group_max_size par_preys_group_max_size
   set preys_safe-distance par_preys_safe-distance / patch-width
   set preys_height_min par_preys_height_min ; meters
   set preys_height_max par_preys_height_max
+  set preys_visual_acuity_min par_preys_visual_acuity_min ; % of maximum perception distance
+  set preys_visual_acuity_max par_preys_visual_acuity_min
   set preys_speed_min convert-kmperh-to-patchpersec par_preys_speed_min ; patch width (m) per second
   set preys_speed_max convert-kmperh-to-patchpersec par_preys_speed_max
   set preys_tte_min par_preys_tte_min ; minutes
@@ -241,12 +259,12 @@ to set-parameters
   set preys_cooldowntime_min par_preys_cooldowntime_min
   set preys_cooldowntime_max par_preys_cooldowntime_max
 
-  ;;;; positions
-  set starting-point patch (min-pxcor + floor (world-width / 2)) (min-pycor + floor (world-height / 2))
+  set preys_randomwalk_anglerange par_preys_randomwalk_anglerange ;;; degrees
 
   set starting-point-buffer-distance par_starting-point-buffer-distance ; km
 
-  set target-point one-of patches with [
+  ;;; hunters group movement planning
+  set planned-waypoints one-of patches with [
     pxcor < min-pxcor + 0.2 * world-width or
     pycor < min-pycor + 0.2 * world-height or
     pxcor > min-pxcor + 0.8 * world-width or
@@ -299,6 +317,8 @@ to setup-prey-groups
   create-preys num-preys
   [
     set height preys_height_min + random-float (preys_height_max - preys_height_min)
+    set visual_acuity preys_visual_acuity_min + random-float (preys_visual_acuity_max - preys_visual_acuity_min)
+
     set time-to-exhaustion preys_tte_min + random (preys_tte_max - preys_tte_min)
     set time-to-exhaustion time-to-exhaustion * 60 ; convert minutes to seconds
     set reaction-time preys_reactiontime_min + random (preys_reactiontime_max - preys_reactiontime_min)
@@ -306,7 +326,8 @@ to setup-prey-groups
 
     set group-leader false
 
-    set unseen-target-location nobody
+    set any-unseen-target false
+    set unseen-target-location (patch-set)
 
     set moved-this-turn false
 
@@ -415,13 +436,17 @@ to setup-hunting-party
     [
       set height hunters_height_min + random-float (hunters_height_max - hunters_height_min)
       set stealth-height height * (hunters_height_stealth / 100)
+      set visual_acuity hunters_visual_acuity_min + random-float (hunters_visual_acuity_max - hunters_visual_acuity_min)
+
       set time-to-exhaustion hunters_tte_min + random (hunters_tte_max - hunters_tte_min)
       set time-to-exhaustion time-to-exhaustion * 60 ; convert minutes to seconds
       set reaction-time hunters_reactiontime_min + random (hunters_reactiontime_max - hunters_reactiontime_min)
       set cooldown-time hunters_cooldowntime_min + random (hunters_cooldowntime_max - hunters_cooldowntime_min)
 
+      set any-unseen-target false
+      set unseen-target-location (patch-set)
+
       set follow-track-target nobody
-      set unseen-target-location nobody
       set approaching-target nobody
       set pursuing-target nobody
 
@@ -442,8 +467,7 @@ to initialise-perceptions
 
   ask (turtle-set preys hunters)
   [
-    set sighting false
-    set message false
+    set any-sighting false
     set hunters-in-sight (turtle-set)
     set preys-in-sight (turtle-set)
 
@@ -474,7 +498,7 @@ to go
 
   ask (turtle-set preys hunters with [cooldown-counter = 0])
   [
-    ifelse (sighting)
+    ifelse (any-sighting)
     [
       ifelse (breed = preys)
       [
@@ -494,39 +518,35 @@ to go
 
   ask (turtle-set preys hunters) with [not moved-this-turn and cooldown-counter = 0]
   [
-    ifelse (message)
+    ifelse (any-unseen-target)
     [
       ifelse (breed = preys)
       [
-        prey-message-move
+        prey-memory-move
       ]
       [
-        hunter-message-move
+        hunter-memory-move
       ]
     ]
     [
       ifelse (breed = preys)
       [
-        let unseen-threat (unseen-target-location != nobody and distance unseen-target-location < preys_safe-distance)
-        ifelse (unseen-threat)
-        [
-          prey-memory-move
-        ]
-        [
-          prey-default-move
-        ]
-
+        prey-default-move
       ]
       [
-        let unseen-prey (unseen-target-location != nobody and unseen-target-location != patch-here)
-        ifelse (unseen-prey)
-        [
-          hunter-memory-move
-        ]
-        [
-          hunter-default-move
-        ]
+        hunter-default-move
       ]
+    ]
+  ]
+
+  ask (turtle-set preys hunters) with [has-message]
+  [
+    ifelse (breed = preys)
+    [
+      prey-communicate
+    ]
+    [
+      hunter-communicate
     ]
   ]
 
@@ -569,9 +589,6 @@ to prey-sighting-move
   [
     if (print-messages) [ print (word "thinking... " reaction-counter " secs to reaction") ]
 
-    ;;; mark one of the patches of sightings as target (used once the reaction time has past and preys are no more in sight)
-    set unseen-target-location [patch-here] of one-of hunters-in-sight
-
     ;;; PROCESS REACTION
     set reaction-counter reaction-counter - 1
   ]
@@ -584,7 +601,7 @@ end
 
 to prey-message-move
 
-  let fleeing-preys preys-in-sight with [ sighting and running-counter > 0 ]
+  let fleeing-preys preys-in-sight with [ any-sighting and running-counter > 0 ]
 
   if (any? fleeing-preys)
   [
@@ -604,17 +621,14 @@ to hunter-sighting-move
   [
     if (print-messages) [ print (word "thinking... " reaction-counter " secs to reaction") ]
 
-    ;;; mark one of the patches of sightings as target (used once the reaction time has past and preys are no more in sight)
-    set unseen-target-location [patch-here] of one-of preys-in-sight
-
     ;;; PROCESS REACTION
     set reaction-counter reaction-counter - 1
   ]
   [
-    ifelse (any? preys-in-sight with [sighting])
+    ifelse (any? preys-in-sight with [any-sighting])
     [
       ;;; One sighted prey is already alert
-      let alerted-preys preys-in-sight with [sighting]
+      let alerted-preys preys-in-sight with [any-sighting]
 
       ;;; stand, if stealth
       set stealth false
@@ -726,34 +740,40 @@ to hunter-approach [ aPrey ]
 
 end
 
-to hunter-message-move
-
-  let alerted-hunters hunters-in-sight with [sighting]
-
-  ;;; IMMITATE OTHER APPROACH
-
-end
-
 to hunter-memory-move
 
   save-hunting-mode "APPROACH-BLIND"
 
-  ;;; continue towards the point of last sighting
-  face unseen-target-location
+  let me self
+  let unseenTarget min-one-of unseen-target-location [distance me]
 
-  ;;; move
+  ;;; continue towards the point of last sighting
+  face unseenTarget
   advance-with-heading-and-speed-here heading hunters_speed_min
+
+  ;;; forget unseen target if already there
+  if (unseenTarget = patch-here)
+  [
+    set unseen-target-location unseen-target-location with [self != unseenTarget]
+  ]
 
 end
 
 to prey-memory-move
 
-  ;;; continue moving away from the point of last sighting
-  face unseen-target-location
-  set heading heading - 180
+  let me self
+  let unseenTarget min-one-of unseen-target-location [distance me]
 
-  ;;; move
+  ;;; continue moving away from the point of last sighting
+  face unseenTarget
+  set heading heading - 180
   advance-with-heading-and-speed-here heading preys_speed_min
+
+  ;;; forget unseen target if safe enough distance
+  if (distance unseenTarget >= preys_safe-distance)
+  [
+    set unseen-target-location unseen-target-location with [self != unseenTarget]
+  ]
 
 end
 
@@ -765,9 +785,6 @@ to prey-default-move
 
   ;;; reset running-counter (default assumed to be "effortless")
   set running-counter 0
-
-  ;;; forget last sighting point
-  set unseen-target-location nobody
 
   let moving false
 
@@ -783,6 +800,8 @@ to prey-default-move
   if (prey-attraction-max > 0)
   [ set patch-pull 100 * ([prey-attraction] of patch-here) / prey-attraction-max ]
 
+  ;set speed speed * patch-pull / 100 ;;; reduce speed in this patch according to attractiveness
+
   if (random-float 100 > patch-pull)
   [
     ;;; Second priority: keeping the group together
@@ -791,12 +810,13 @@ to prey-default-move
     let groupMembers other preys with [group_id = myGroupId]
     let groupMembersNotInSight groupMembers with [not presence-detected-by myself]
 
-    if (not group-leader and count groupMembers > 0 and count groupMembers = count groupMembersNotInSight)
+    if (any? groupMembersNotInSight and not group-leader and count groupMembers > 0 );and count groupMembers = count groupMembersNotInSight)
     [
       face min-one-of groupMembersNotInSight [distance myself]
     ]
 
-    rt (- 15 + random 30) ;;; add random direction biased by default heading
+    ;;; add random direction biased by default heading
+    rt (- (preys_randomwalk_anglerange / 2) + random preys_randomwalk_anglerange)
 
     set moving true
   ]
@@ -822,27 +842,26 @@ to hunter-default-move
   ;;; stand, if stealth
   set stealth false
 
-  ;;; forget last sighting point
-  set unseen-target-location nobody
-
-  let other-tracks-index get-all-tracks-but-mine tracks
+  let tracksHere get-all-tracks-but-hunters tracks
 
   ;;; search for tracks
-  ifelse (length other-tracks-index > 0)
+  ifelse (length tracksHere > 0)
   [
     ;;; TRACKING
     save-hunting-mode "TRACK"
     ;;; get the most recent track
-    set follow-track-target (item 0 (item 0 other-tracks-index))
+    set follow-track-target (item 0 (item 0 tracksHere))
     ;;; and face it
-    set heading (item 1 (item 0 other-tracks-index))
+    set heading (item 1 (item 0 tracksHere))
   ]
   [
     ;;; SEARCHING
     save-hunting-mode "SEARCH"
     set follow-track-target nobody ;;; erase reference to last track followed? (no consequence if the most recent track is always followed)
-    ;;; or continue path towards target-point
-    face target-point
+    ;;; or continue path towards planned-waypoints
+    face planned-waypoints ;;; TO-DO: face first planned-waypoints
+    ;;; add random direction biased by default heading
+    rt (- (hunters_randomwalk_anglerange / 2) + random hunters_randomwalk_anglerange)
   ]
 
   ;;; move
@@ -850,20 +869,72 @@ to hunter-default-move
 
 end
 
-to-report get-all-tracks-but-mine [ tracksList ]
+to-report get-all-tracks-but-hunters [ tracksList ]
 
   let filteredList []
 
   foreach tracksList
   [
     aTrack ->
-   if (first aTrack != self)
+    let trackOwnerStillExists (first aTrack != nobody)
+    if (trackOwnerStillExists)
     [
-      set filteredList lput aTrack filteredList
+      let trackOwnerIsNotHunter ([breed] of first aTrack != hunters)
+      if (trackOwnerIsNotHunter)
+      [
+        set filteredList lput aTrack filteredList
+      ]
     ]
   ]
 
   report filteredList
+
+end
+
+to hunter-communicate
+
+  let me self
+  ;;; Option A: send message to any hunters seen me
+  let receivers hunters with [member? me hunters-in-sight]
+  ;;; Option B: send message only to hunters seen me that are also seen by me
+  ;let receivers hunters-in-sight with [member? me hunters-in-sight]
+
+  ask receivers
+  [
+    ;;; add unseen location to any other already in memory
+    set unseen-target-location (patch-set ([unseen-target-location] of me) unseen-target-location)
+
+    ;;; get track target if not already following one
+    if (follow-track-target = nobody)
+    [
+      set follow-track-target [follow-track-target] of me
+    ]
+
+    ;;; get approaching target if not already following one
+    if (approaching-target = nobody)
+    [
+      set approaching-target [approaching-target] of me
+    ]
+
+    ;;; get pursuing target if not already following one
+    if (pursuing-target = nobody)
+    [
+      set pursuing-target [pursuing-target] of me
+    ]
+  ]
+
+end
+
+to prey-communicate
+
+  let me self
+  let receivers preys-in-sight with [member? me preys-in-sight]
+
+  ask receivers
+  [
+    ;;; add unseen location to any other already in memory
+    set unseen-target-location (patch-set ([unseen-target-location] of me) unseen-target-location)
+  ]
 
 end
 
@@ -941,34 +1012,52 @@ end
 
 to update-alertness
 
-  let oldSighting sighting
-  let oldMessage message
+  let oldSighting any-sighting
 
   ifelse (breed = preys)
   [
-    set sighting (any? hunters-in-sight)
-    set message (any? preys-in-sight with [any? hunters-in-sight])
+    set any-sighting (any? hunters-in-sight)
 
-    ;;; account for new prey-hunter-sightings
-    if (sighting and not oldSighting)
+    ;;; new prey-hunter-sightings
+    if (any-sighting and not oldSighting)
     [
       set reaction-counter reaction-time - relax-counter
       set relax-counter reaction-time
 
+      ;;; mark one of the patches of sightings as target (used once the hunters are no more in sight)
+      set unseen-target-location (patch-set ([patch-here] of hunters-in-sight) unseen-target-location)
+
+      ;;; add to global count
       set prey-hunter-sightings prey-hunter-sightings + count hunters-in-sight
+    ]
+
+    set any-unseen-target false
+    if (count unseen-target-location > 0)
+    [
+      let me self
+      set any-unseen-target (min [distance me] of unseen-target-location < preys_safe-distance)
     ]
   ]
   [
-    set sighting (any? preys-in-sight)
-    set message (any? hunters-in-sight with [any? preys-in-sight])
+    set any-sighting (any? preys-in-sight)
 
     ;;; account for new hunter-prey-sightings
-    if (sighting and not oldSighting)
+    if (any-sighting and not oldSighting)
     [
       set reaction-counter reaction-time - relax-counter
       set relax-counter reaction-time
 
+      ;;; mark one of the patches of sightings as target (used once preys are no more in sight)
+      set unseen-target-location (patch-set ([patch-here] of preys-in-sight) unseen-target-location)
+
+      ;;; add to global count
       set hunter-prey-sightings hunter-prey-sightings + count preys-in-sight
+    ]
+
+    set any-unseen-target false
+    if (count unseen-target-location > 0)
+    [
+      set any-unseen-target true
     ]
   ]
 
@@ -1007,6 +1096,10 @@ to-report presence-detected-by [ theOther ]
 
     let lineOfSightFromTheOtherToMe line-of-sight-with me
     set response member? ([patch-here] of me) lineOfSightFromTheOtherToMe
+
+    ;;; test sighting skill of theOther
+    if (distance me > max-perception-distance * visual_acuity / 100)
+    [ set response false ]
 
     set heading currentHeading
   ]
@@ -1079,6 +1172,19 @@ to-report line-of-sight-with [ anotherTurtle ]
   ]
 
   report visiblePatches
+
+end
+
+to-report has-message
+
+  let value (count unseen-target-location > 0)
+
+  if (breed = hunters)
+  [
+    set value value or (follow-track-target != nobody) or (approaching-target != nobody) or (pursuing-target != nobody)
+  ]
+
+  report value
 
 end
 
@@ -1363,9 +1469,9 @@ to paint-patches
     ]
   ]
 
-  if (display-target-point)
+  if (display-waypoints)
   [
-    ask target-point
+    ask planned-waypoints
     [
       set pcolor orange
       set plabel "TARGET"
@@ -1449,11 +1555,11 @@ end
 GRAPHICS-WINDOW
 210
 10
-622
-423
+620
+421
 -1
 -1
-4.0
+2.0
 1
 10
 1
@@ -1463,10 +1569,10 @@ GRAPHICS-WINDOW
 0
 0
 1
--50
-50
--50
-50
+-100
+100
+-100
+100
 0
 0
 1
@@ -1551,7 +1657,7 @@ INPUTBOX
 99
 158
 SEED
-35579.0
+0.0
 1
 0
 Number
@@ -1564,7 +1670,7 @@ CHOOSER
 display-mode
 display-mode
 "elevation" "obstacle" "elevation+obstacle" "prey-attraction" "tracks"
-1
+4
 
 BUTTON
 42
@@ -1690,7 +1796,7 @@ par_starting-point-buffer-distance
 par_starting-point-buffer-distance
 0
 10
-2.0
+1.5
 0.1
 1
 Km
@@ -1752,7 +1858,7 @@ Environment
 1
 
 MONITOR
-96
+80
 348
 185
 393
@@ -1828,10 +1934,10 @@ m
 HORIZONTAL
 
 SLIDER
-643
-484
-834
-517
+645
+542
+836
+575
 par_hunters_speed_min
 par_hunters_speed_min
 1
@@ -1843,10 +1949,10 @@ km/h
 HORIZONTAL
 
 SLIDER
-642
-521
-835
-554
+644
+579
+837
+612
 par_hunters_speed_max
 par_hunters_speed_max
 par_hunters_speed_min
@@ -1858,10 +1964,10 @@ km/h
 HORIZONTAL
 
 SLIDER
-643
-602
-833
-635
+645
+660
+835
+693
 par_hunters_tte_min
 par_hunters_tte_min
 1
@@ -1873,10 +1979,10 @@ minutes
 HORIZONTAL
 
 SLIDER
-643
-636
-834
-669
+645
+694
+836
+727
 par_hunters_tte_max
 par_hunters_tte_max
 par_hunters_tte_min
@@ -1888,10 +1994,10 @@ minutes
 HORIZONTAL
 
 SLIDER
-632
-677
-846
-710
+634
+735
+848
+768
 par_hunters_reactiontime_min
 par_hunters_reactiontime_min
 1
@@ -1903,10 +2009,10 @@ seconds
 HORIZONTAL
 
 SLIDER
-632
-710
-846
-743
+634
+768
+848
+801
 par_hunters_reactiontime_max
 par_hunters_reactiontime_max
 par_hunters_reactiontime_min
@@ -1948,10 +2054,10 @@ m
 HORIZONTAL
 
 SLIDER
-871
-484
-1064
-517
+873
+542
+1066
+575
 par_preys_speed_min
 par_preys_speed_min
 1
@@ -1963,10 +2069,10 @@ km/h
 HORIZONTAL
 
 SLIDER
-871
-518
-1064
-551
+873
+576
+1066
+609
 par_preys_speed_max
 par_preys_speed_max
 par_preys_speed_min
@@ -1978,10 +2084,10 @@ km/h
 HORIZONTAL
 
 SLIDER
-867
-600
-1060
-633
+869
+658
+1062
+691
 par_preys_tte_min
 par_preys_tte_min
 1
@@ -1993,10 +2099,10 @@ minutes
 HORIZONTAL
 
 SLIDER
-867
-635
-1060
-668
+869
+693
+1062
+726
 par_preys_tte_max
 par_preys_tte_max
 par_preys_tte_min
@@ -2008,10 +2114,10 @@ minutes
 HORIZONTAL
 
 SLIDER
-852
-677
-1067
-710
+854
+735
+1069
+768
 par_preys_reactiontime_min
 par_preys_reactiontime_min
 1
@@ -2023,10 +2129,10 @@ secs
 HORIZONTAL
 
 SLIDER
-852
-712
-1067
-745
+854
+770
+1069
+803
 par_preys_reactiontime_max
 par_preys_reactiontime_max
 par_preys_reactiontime_min
@@ -2070,10 +2176,10 @@ HORIZONTAL
 MONITOR
 637
 259
-725
+816
 304
 NIL
-target-point
+planned-waypoints
 17
 1
 11
@@ -2081,10 +2187,10 @@ target-point
 SWITCH
 42
 209
-187
+189
 242
-display-target-point
-display-target-point
+display-waypoints
+display-waypoints
 0
 1
 -1000
@@ -2098,7 +2204,7 @@ par_preys_safe-distance
 par_preys_safe-distance
 1
 2000
-1000.0
+500.0
 1
 1
 m
@@ -2127,10 +2233,10 @@ convert-ticks-to-remainder-seconds
 11
 
 SLIDER
-629
-747
-847
-780
+631
+805
+849
+838
 par_hunters_cooldowntime_min
 par_hunters_cooldowntime_min
 0
@@ -2142,10 +2248,10 @@ secs
 HORIZONTAL
 
 SLIDER
-630
-783
-849
-816
+632
+841
+851
+874
 par_hunters_cooldowntime_max
 par_hunters_cooldowntime_max
 par_hunters_cooldowntime_min
@@ -2157,10 +2263,10 @@ secs
 HORIZONTAL
 
 SLIDER
-849
-747
-1067
-780
+851
+805
+1069
+838
 par_preys_cooldowntime_min
 par_preys_cooldowntime_min
 0
@@ -2172,10 +2278,10 @@ secs
 HORIZONTAL
 
 SLIDER
-849
-782
-1068
-815
+851
+840
+1070
+873
 par_preys_cooldowntime_max
 par_preys_cooldowntime_max
 par_preys_cooldowntime_min
@@ -2239,21 +2345,21 @@ m
 HORIZONTAL
 
 MONITOR
-79
+65
 393
 185
 438
 world-width (Km)
-world-width * patch-width * 1E-3
+precision (world-width * patch-width * 1E-3) 4
 17
 1
 11
 
 SLIDER
-635
-445
-878
-478
+626
+442
+869
+475
 par_hunters_height_stealth
 par_hunters_height_stealth
 0
@@ -2265,10 +2371,10 @@ par_hunters_height_stealth
 HORIZONTAL
 
 SLIDER
-628
-556
-882
-589
+630
+614
+884
+647
 par_hunters_speed_stealth
 par_hunters_speed_stealth
 0
@@ -2277,6 +2383,96 @@ par_hunters_speed_stealth
 1
 1
 % of min speed
+HORIZONTAL
+
+SLIDER
+587
+879
+852
+912
+par_hunters_randomwalk_anglerange
+par_hunters_randomwalk_anglerange
+0
+360
+30.0
+1
+1
+degrees
+HORIZONTAL
+
+SLIDER
+854
+878
+1109
+911
+par_preys_randomwalk_anglerange
+par_preys_randomwalk_anglerange
+0
+360
+30.0
+1
+1
+degrees
+HORIZONTAL
+
+SLIDER
+626
+477
+870
+510
+par_hunters_visual_acuity_min
+par_hunters_visual_acuity_min
+0
+100
+50.0
+1
+1
+% max. dist.
+HORIZONTAL
+
+SLIDER
+870
+476
+1099
+509
+par_preys_visual_acuity_min
+par_preys_visual_acuity_min
+0
+100
+50.0
+1
+1
+% max. dist.
+HORIZONTAL
+
+SLIDER
+627
+509
+871
+542
+par_hunters_visual_acuity_max
+par_hunters_visual_acuity_max
+0
+100
+100.0
+1
+1
+% max. dist.
+HORIZONTAL
+
+SLIDER
+870
+508
+1106
+541
+par_preys_visual_acuity_max
+par_preys_visual_acuity_max
+0
+100
+100.0
+1
+1
+% max. dist.
 HORIZONTAL
 
 @#$#@#$#@
@@ -2621,7 +2817,7 @@ false
 Polygon -7500403 true true 270 75 225 30 30 225 75 270
 Polygon -7500403 true true 30 75 75 30 270 225 225 270
 @#$#@#$#@
-NetLogo 6.2.2
+NetLogo 6.4.0
 @#$#@#$#@
 @#$#@#$#@
 @#$#@#$#@
