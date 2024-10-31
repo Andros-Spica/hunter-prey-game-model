@@ -8,13 +8,16 @@ globals
 
   ;;; parameters
   ;;;; contextual
+  starting-point
   starting-point-buffer-distance
   obstacle-damage
   track-mark-probability
   track-pregeneration-period
 
-  ;;;; hunters
+  ;;;; hunters (population)
   num-hunters
+
+  num-planned-waypoints
 
   hunters_height_stealth
   hunters_height_min
@@ -35,7 +38,7 @@ globals
 
   hunters_randomwalk_anglerange
 
-  ;;;; preys
+  ;;;; preys (population)
   num-preys
   preys_group_max_size
   preys_safe-distance
@@ -60,14 +63,15 @@ globals
   prey-attractor-probability
 
   ;;; variables
-  starting-point
-  planned-waypoints
-
   prey-attraction-max
+
+  planned-waypoints
+  visited-planned-waypoints
 
   hunter-prey-sightings
   prey-hunter-sightings
 
+  is-bout-finished
   hunter-who-shot
   prey-who-got-shot
 ]
@@ -242,6 +246,8 @@ to set-parameters
 
   set hunters_randomwalk_anglerange par_hunters_randomwalk_anglerange ;;; degrees
 
+  set num-planned-waypoints par_num-planned-waypoints
+
   ;;;; preys
   set num-preys par_num-preys
   set preys_group_max_size par_preys_group_max_size
@@ -264,14 +270,21 @@ to set-parameters
   set starting-point-buffer-distance par_starting-point-buffer-distance ; km
 
   ;;; hunters group movement planning
-  set planned-waypoints one-of patches with [
-    pxcor < min-pxcor + 0.2 * world-width or
-    pycor < min-pycor + 0.2 * world-height or
-    pxcor > min-pxcor + 0.8 * world-width or
-    pycor > min-pycor + 0.8 * world-height ] ;;; choose apatch near the edges as target point
+  set planned-waypoints get-planned-waypoints num-planned-waypoints
+  set visited-planned-waypoints []
+
+end
+
+to-report get-planned-waypoints [ numPoints ]
+
+  let valid-candidates patches
 
   ;;; TO-DO - better definition/representation of previous planning
   ;;; (e.g., interesting points, attractors?, must be "economic", knowledge of area, movement patterns, wind direction of the day)
+
+  let selected-waypoints n-of numPoints valid-candidates
+
+  report selected-waypoints
 
 end
 
@@ -282,6 +295,8 @@ to initialise-output
 
   set hunter-who-shot nobody
   set prey-who-got-shot nobody
+
+  set is-bout-finished false
 
 end
 
@@ -555,6 +570,11 @@ to go
     check-escape-condition
   ]
 
+  ask hunters
+  [
+    update-planned-waypoints
+  ]
+
   ask (turtle-set preys hunters)
   [
     check-cooldown-condition
@@ -576,6 +596,8 @@ to go
   update-display
 
   if (print-messages) [ print "second has passed." ]
+
+  if (is-bout-finished) [ stop ]
 
   tick
 
@@ -858,8 +880,9 @@ to hunter-default-move
     ;;; SEARCHING
     save-hunting-mode "SEARCH"
     set follow-track-target nobody ;;; erase reference to last track followed? (no consequence if the most recent track is always followed)
-    ;;; or continue path towards planned-waypoints
-    face planned-waypoints ;;; TO-DO: face first planned-waypoints
+    ;;; continue path towards next waypoint
+    let me self
+    face min-one-of planned-waypoints [distance me]
     ;;; add random direction biased by default heading
     rt (- (hunters_randomwalk_anglerange / 2) + random hunters_randomwalk_anglerange)
   ]
@@ -949,6 +972,31 @@ to check-escape-condition ;;; preys
 
 end
 
+to update-planned-waypoints
+
+  if (member? patch-here planned-waypoints)
+  [
+    set visited-planned-waypoints lput patch-here visited-planned-waypoints
+
+    ifelse (patch-here = starting-point AND count planned-waypoints = 1)
+    [
+      ;;; signal end of bout
+      set is-bout-finished true
+    ]
+    [
+      ask patch-here [ set planned-waypoints other planned-waypoints ]
+
+      ;;; if no more waypoints, add starting point (back to camp)
+      if (count planned-waypoints = 0)
+      [
+        set planned-waypoints starting-point
+        save-hunting-mode "BACK-TO-CAMP"
+      ]
+    ]
+  ]
+
+end
+
 to check-cooldown-condition
 
   ifelse (running-counter = time-to-exhaustion)
@@ -1026,6 +1074,7 @@ to update-alertness
 
       ;;; mark one of the patches of sightings as target (used once the hunters are no more in sight)
       set unseen-target-location (patch-set ([patch-here] of hunters-in-sight) unseen-target-location)
+      ERASE OLDER LOCATIONS OF THE SAME ANIMAL!!!! set unseen-target-location unseen-target-location with [self != unseenTarget]
 
       ;;; add to global count
       set prey-hunter-sightings prey-hunter-sightings + count hunters-in-sight
@@ -1474,7 +1523,7 @@ to paint-patches
     ask planned-waypoints
     [
       set pcolor orange
-      set plabel "TARGET"
+      set plabel "WP"
     ]
   ]
 
@@ -1690,10 +1739,10 @@ NIL
 1
 
 PLOT
-1013
-18
-1382
-168
+1053
+20
+1422
+170
 obstacles
 patch obstacle height (m)
 NIL
@@ -1788,10 +1837,10 @@ m height
 HORIZONTAL
 
 SLIDER
-638
-335
-862
-368
+831
+122
+1045
+155
 par_starting-point-buffer-distance
 par_starting-point-buffer-distance
 0
@@ -1804,9 +1853,9 @@ HORIZONTAL
 
 SLIDER
 630
-129
-1012
-162
+154
+999
+187
 par_obstacle-damage
 par_obstacle-damage
 0
@@ -1819,9 +1868,9 @@ HORIZONTAL
 
 SLIDER
 630
-163
-1012
-196
+188
+1000
+221
 par_track-mark-probability
 par_track-mark-probability
 0
@@ -1833,10 +1882,10 @@ par_track-mark-probability
 HORIZONTAL
 
 SLIDER
-630
-98
-942
-131
+628
+122
+832
+155
 par_track-pregeneration-period
 par_track-pregeneration-period
 0
@@ -1869,10 +1918,10 @@ patch-width
 11
 
 SLIDER
-635
-224
-827
-257
+627
+243
+819
+276
 par_num-hunters
 par_num-hunters
 0
@@ -1884,20 +1933,20 @@ hunters
 HORIZONTAL
 
 TEXTBOX
-638
-205
-788
-223
+630
+224
+780
+242
 Hunters
 14
 0.0
 1
 
 TEXTBOX
-878
-204
-1028
-222
+870
+223
+1020
+241
 Preys
 14
 0.0
@@ -2144,10 +2193,10 @@ secs
 HORIZONTAL
 
 SLIDER
-868
-225
-1058
-258
+860
+244
+1050
+277
 par_num-preys
 par_num-preys
 0
@@ -2159,10 +2208,10 @@ preys
 HORIZONTAL
 
 SLIDER
-833
-266
-1066
-299
+843
+275
+1076
+308
 par_preys_group_max_size
 par_preys_group_max_size
 0
@@ -2174,10 +2223,10 @@ preys/group
 HORIZONTAL
 
 MONITOR
-637
-259
-816
-304
+629
+303
+808
+348
 NIL
 planned-waypoints
 17
@@ -2196,10 +2245,10 @@ display-waypoints
 -1000
 
 SLIDER
-848
-301
-1066
-334
+846
+343
+1064
+376
 par_preys_safe-distance
 par_preys_safe-distance
 1
@@ -2330,10 +2379,10 @@ PENS
 "default" 1.0 0 -16777216 true "" "plot sum [length tracks] of patches"
 
 SLIDER
-637
-301
-850
-334
+641
+341
+832
+374
 par_max-shooting-distance
 par_max-shooting-distance
 10
@@ -2474,6 +2523,31 @@ par_preys_visual_acuity_max
 1
 % max. dist.
 HORIZONTAL
+
+SLIDER
+627
+273
+843
+306
+par_num-planned-waypoints
+par_num-planned-waypoints
+1
+10
+3.0
+1
+1
+waypoints
+HORIZONTAL
+
+TEXTBOX
+633
+106
+783
+124
+Contextual
+14
+0.0
+1
 
 @#$#@#$#@
 ## WHAT IS IT?
