@@ -2,13 +2,13 @@ globals
 [
   ;;; constants
   patch-width
-  ;tick-length-in-seconds
   max-perception-distance
   track-maximum
+  good-daylight-duration
+  starting-point
 
   ;;; parameters
   ;;;; contextual
-  starting-point
   starting-point-buffer-distance
   obstacle-damage
   track-mark-probability
@@ -203,6 +203,9 @@ to set-constants
   set max-perception-distance 1000 * 5 / patch-width ;;; patch-width unit (default: 1000 * 5 / patch-width, i.e. 5 km approximation on person standing on flat terrain on Earth)
 
   set track-maximum 5
+
+  set good-daylight-duration 8 * 60 * 60 ;;; default: 8 hours in seconds
+  ;;; NOTE: the range in Namibia study areas of total daylight 9-10 hours; discouting an hour to get back to camp
 
   set starting-point patch (min-pxcor + floor (world-width / 2)) (min-pycor + floor (world-height / 2))
 
@@ -647,13 +650,19 @@ to hunter-sighting-move
     set reaction-counter reaction-counter - 1
   ]
   [
-    ifelse (any? preys-in-sight with [any-sighting])
-    [
-      ;;; One sighted prey is already alert
-      let alerted-preys preys-in-sight with [any-sighting]
+    let me self
+    let alerted-preys preys-in-sight with [any-sighting and member? me hunters-in-sight]
 
+    ifelse (any? alerted-preys)
+    [
       ;;; stand, if stealth
       set stealth false
+
+      ;;; prey becomes aware of this hunter, if not already before
+      ask min-one-of alerted-preys [distance myself]
+      [
+       set hunters-in-sight (turtle-set myself hunters-in-sight)
+      ]
 
       ifelse (min [distance myself] of alerted-preys < max-shooting-distance)
       [
@@ -667,12 +676,6 @@ to hunter-sighting-move
         ;;; PURSUE
         save-hunting-mode "PURSUE"
         hunter-pursue (min-one-of alerted-preys [distance myself])
-      ]
-
-      ;;; prey becomes aware of this hunter, if not already before
-      ask min-one-of alerted-preys [distance myself]
-      [
-       set hunters-in-sight (turtle-set myself hunters-in-sight)
       ]
     ]
     [
@@ -989,10 +992,16 @@ to update-planned-waypoints
       ;;; if no more waypoints, add starting point (back to camp)
       if (count planned-waypoints = 0)
       [
-        set planned-waypoints starting-point
+        set planned-waypoints (patch-set starting-point)
         save-hunting-mode "BACK-TO-CAMP"
       ]
     ]
+  ]
+
+  if (ticks > good-daylight-duration and not member? starting-point planned-waypoints)
+  [
+    set planned-waypoints (patch-set starting-point)
+    save-hunting-mode "BACK-TO-CAMP"
   ]
 
 end
