@@ -1072,9 +1072,9 @@ to update-alertness
       set reaction-counter reaction-time - relax-counter
       set relax-counter reaction-time
 
-      ;;; mark one of the patches of sightings as target (used once the hunters are no more in sight)
-      set unseen-target-location (patch-set ([patch-here] of hunters-in-sight) unseen-target-location)
-      ERASE OLDER LOCATIONS OF THE SAME ANIMAL!!!! set unseen-target-location unseen-target-location with [self != unseenTarget]
+      ;;; mark patches of sightings as unseen target locations, used once the hunters are no more in sight
+      ;;; NOTE: all former unseen target locations are clearer from memory
+      set unseen-target-location (patch-set ([patch-here] of hunters-in-sight))
 
       ;;; add to global count
       set prey-hunter-sightings prey-hunter-sightings + count hunters-in-sight
@@ -1096,8 +1096,9 @@ to update-alertness
       set reaction-counter reaction-time - relax-counter
       set relax-counter reaction-time
 
-      ;;; mark one of the patches of sightings as target (used once preys are no more in sight)
-      set unseen-target-location (patch-set ([patch-here] of preys-in-sight) unseen-target-location)
+      ;;; mark patches of sightings as unseen target locations, used once prey are no more in sight
+      ;;; NOTE: all former unseen target locations are clearer from memory
+      set unseen-target-location (patch-set ([patch-here] of preys-in-sight))
 
       ;;; add to global count
       set hunter-prey-sightings hunter-prey-sightings + count preys-in-sight
