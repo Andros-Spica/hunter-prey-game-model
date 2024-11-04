@@ -22,11 +22,12 @@ globals
   hunters_height_stealth
   hunters_height_min
   hunters_height_max
-  hunters_visual_acuity_min
-  hunters_visual_acuity_max
+  hunters_visualacuity_mean
+  hunters_visualacuity_sd
   hunters_speed_stealth
   hunters_speed_min
   hunters_speed_max
+  hunters_speed_avmax
   hunters_tte_min
   hunters_tte_max
   hunters_reactiontime_min
@@ -45,10 +46,11 @@ globals
 
   preys_height_min
   preys_height_max
-  preys_visual_acuity_min
-  preys_visual_acuity_max
+  preys_visualacuity_mean
+  preys_visualacuity_sd
   preys_speed_min
   preys_speed_max
+  preys_speed_avmax
   preys_tte_min
   preys_tte_max
   preys_reactiontime_min
@@ -86,7 +88,8 @@ hunters-own
 [
   height
   stealth-height
-  visual_acuity
+  visual-acuity
+  speed-max
   time-to-exhaustion
   reaction-time
   cooldown-time
@@ -120,7 +123,8 @@ hunters-own
 preys-own
 [
   height
-  visual_acuity
+  visual-acuity
+  speed-max
   time-to-exhaustion
   reaction-time
   cooldown-time
@@ -233,10 +237,11 @@ to set-parameters
   set hunters_height_min par_hunters_height_min ; meters
   set hunters_height_max par_hunters_height_max
   set hunters_height_stealth par_hunters_height_stealth ; metre
-  set hunters_visual_acuity_min par_hunters_visual_acuity_min ; % of maximum perception distance
-  set hunters_visual_acuity_max par_hunters_visual_acuity_max
+  set hunters_visualacuity_mean par_hunters_visualacuity_mean ; % of maximum perception distance
+  set hunters_visualacuity_sd par_hunters_visualacuity_sd
   set hunters_speed_min convert-kmperh-to-patchpersec par_hunters_speed_min ; patch width (m) per second
   set hunters_speed_max convert-kmperh-to-patchpersec par_hunters_speed_max
+  set hunters_speed_avmax convert-kmperh-to-patchpersec par_hunters_speed_avmax
   set hunters_speed_stealth hunters_speed_min * (par_hunters_speed_stealth / 100)
   set hunters_tte_min par_hunters_tte_min ; minutes
   set hunters_tte_max par_hunters_tte_max
@@ -257,10 +262,11 @@ to set-parameters
   set preys_safe-distance par_preys_safe-distance / patch-width
   set preys_height_min par_preys_height_min ; meters
   set preys_height_max par_preys_height_max
-  set preys_visual_acuity_min par_preys_visual_acuity_min ; % of maximum perception distance
-  set preys_visual_acuity_max par_preys_visual_acuity_min
+  set preys_visualacuity_mean par_preys_visualacuity_mean ; % of maximum perception distance
+  set preys_visualacuity_sd par_preys_visualacuity_sd
   set preys_speed_min convert-kmperh-to-patchpersec par_preys_speed_min ; patch width (m) per second
   set preys_speed_max convert-kmperh-to-patchpersec par_preys_speed_max
+  set preys_speed_avmax convert-kmperh-to-patchpersec par_preys_speed_avmax
   set preys_tte_min par_preys_tte_min ; minutes
   set preys_tte_max par_preys_tte_max
   set preys_reactiontime_min par_preys_reactiontime_min
@@ -335,7 +341,8 @@ to setup-prey-groups
   create-preys num-preys
   [
     set height preys_height_min + random-float (preys_height_max - preys_height_min)
-    set visual_acuity preys_visual_acuity_min + random-float (preys_visual_acuity_max - preys_visual_acuity_min)
+    set visual-acuity min (list (random-normal preys_visualacuity_mean preys_visualacuity_sd) 100)
+    set speed-max sample-skewed-speed preys_speed_min preys_speed_max preys_speed_avmax
 
     set time-to-exhaustion preys_tte_min + random (preys_tte_max - preys_tte_min)
     set time-to-exhaustion time-to-exhaustion * 60 ; convert minutes to seconds
@@ -454,7 +461,8 @@ to setup-hunting-party
     [
       set height hunters_height_min + random-float (hunters_height_max - hunters_height_min)
       set stealth-height height * (hunters_height_stealth / 100)
-      set visual_acuity hunters_visual_acuity_min + random-float (hunters_visual_acuity_max - hunters_visual_acuity_min)
+      set visual-acuity clamp0100 (random-normal hunters_visualacuity_mean hunters_visualacuity_sd)
+      set speed-max sample-skewed-speed hunters_speed_min hunters_speed_max hunters_speed_avmax
 
       set time-to-exhaustion hunters_tte_min + random (hunters_tte_max - hunters_tte_min)
       set time-to-exhaustion time-to-exhaustion * 60 ; convert minutes to seconds
@@ -774,7 +782,8 @@ to hunter-memory-move
 
   ;;; continue towards the point of last sighting
   face unseenTarget
-  advance-with-heading-and-speed-here heading hunters_speed_min
+
+  make-a-move heading hunters_speed_min speed-max
 
   ;;; forget unseen target if already there
   if (unseenTarget = patch-here)
@@ -792,7 +801,8 @@ to prey-memory-move
   ;;; continue moving away from the point of last sighting
   face unseenTarget
   set heading heading - 180
-  advance-with-heading-and-speed-here heading preys_speed_min
+
+  make-a-move heading preys_speed_min speed-max
 
   ;;; forget unseen target if safe enough distance
   if (distance unseenTarget >= preys_safe-distance)
@@ -808,13 +818,7 @@ to prey-default-move
   if (relax-counter > 0)
   [ set relax-counter relax-counter - 1 ]
 
-  ;;; reset running-counter (default assumed to be "effortless")
-  set running-counter 0
-
   let moving false
-
-  ;; set the default distance the turtle moves as the minimum
-  let speed preys_speed_min
 
   ;;; *Define target heading* ;;;
 
@@ -824,8 +828,6 @@ to prey-default-move
   let patch-pull 0
   if (prey-attraction-max > 0)
   [ set patch-pull 100 * ([prey-attraction] of patch-here) / prey-attraction-max ]
-
-  ;set speed speed * patch-pull / 100 ;;; reduce speed in this patch according to attractiveness
 
   if (random-float 100 > patch-pull)
   [
@@ -850,7 +852,7 @@ to prey-default-move
 
   if (moving)
   [
-    advance-with-heading-and-speed-here heading speed
+    make-a-move heading preys_speed_min speed-max
   ]
 
 end
@@ -860,9 +862,6 @@ to hunter-default-move
   ;;; relaxing (alertness is decreased)
   if (relax-counter > 0)
   [ set relax-counter relax-counter - 1 ]
-
-  ;;; reset running-counter (default assumed to be "effortless")
-  set running-counter 0
 
   ;;; stand, if stealth
   set stealth false
@@ -891,7 +890,7 @@ to hunter-default-move
   ]
 
   ;;; move
-  advance-with-heading-and-speed-here heading hunters_speed_min
+  make-a-move heading hunters_speed_min speed-max
 
 end
 
@@ -1015,6 +1014,8 @@ to check-cooldown-condition
     set cooldown-counter cooldown-time
 
     set running-counter 0
+
+    save-hunting-mode "PAUSE"
   ]
   [
     if (cooldown-counter > 0)
@@ -1157,7 +1158,7 @@ to-report presence-detected-by [ theOther ]
     set response member? ([patch-here] of me) lineOfSightFromTheOtherToMe
 
     ;;; test sighting skill of theOther
-    if (distance me > max-perception-distance * visual_acuity / 100)
+    if (distance me > max-perception-distance * visual-acuity / 100)
     [ set response false ]
 
     set heading currentHeading
@@ -1271,20 +1272,17 @@ to move-away-from [ someTurtles ]
   if (print-messages) [ print (word "distance before: " (distance closestTurtle)) ]
 
   ;; Modulate speed according to distance and safe-distance
-  let maxSpeed preys_speed_min
+  let desiredSpeed preys_speed_min
   if ([distance myself] of closestTurtle < preys_safe-distance)
   [
-    set maxSpeed preys_speed_max
+    set desiredSpeed speed-max
   ]
 
   let oppositeHeading towards closestTurtle - 180
 
-  advance-with-heading-and-speed-here oppositeHeading maxSpeed
+  make-a-move oppositeHeading desiredSpeed speed-max
 
   if (print-messages) [ print (word "distance after: " (distance closestTurtle)) ]
-
-  ;;; account for exertion
-  set running-counter running-counter + 1
 
 end
 
@@ -1304,20 +1302,17 @@ to move-along-with [ someTurtles ]
   if (print-messages) [ print (word "distance before: " (distance closestTurtle)) ]
 
   ;; Modulate speed according to distance and safe-distance
-  let maxSpeed preys_speed_min
+  let desiredSpeed preys_speed_min
   if ([distance myself] of closestTurtle < preys_safe-distance)
   [
-    set maxSpeed preys_speed_max
+    set desiredSpeed speed-max
   ]
 
   let fleeingHeading [heading] of closestTurtle
 
-  advance-with-heading-and-speed-here fleeingHeading maxSpeed
+  make-a-move fleeingHeading desiredSpeed speed-max
 
   if (print-messages) [ print (word "distance after: " (distance closestTurtle)) ]
-
-  ;;; account for exertion
-  set running-counter running-counter + 1
 
 end
 
@@ -1345,7 +1340,20 @@ end
 ;
 ;end
 
-to advance-with-heading-and-speed-here [ aHeading aSpeed ]
+to make-a-move [ aHeading aSpeed maxSpeed ]
+
+  ;;; wrapper where an agent will move itself according to:
+  ;;; - explicitly given heading
+  ;;; - desired speed (actual speed depending on terrain)
+  ;;; - maximum speed for this individual, which is considered to regulate exertion
+
+  move-with-heading-and-speed-here aHeading aSpeed
+
+  apply-exertion aSpeed maxSpeed
+
+end
+
+to move-with-heading-and-speed-here [ aHeading aSpeed ]
 
   ;;; keep track of the target heading
   let targetHeading aHeading
@@ -1358,6 +1366,12 @@ to advance-with-heading-and-speed-here [ aHeading aSpeed ]
 
   if (breed = hunters)
   [ set distance-moved distance-moved + aSpeed ]
+
+end
+
+to apply-exertion [ aSpeed maxSpeed ]
+
+  set running-counter running-counter + (aSpeed / maxSpeed)
 
 end
 
@@ -1586,6 +1600,21 @@ end
 ;;; HELPERS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+to-report sample-skewed-speed [ minSpeed maxSpeed averageMaxSpeed ]
+  ;;; solution suggested by ChatGPT (modified by human author)
+  let distributionRange (maxSpeed - minSpeed)
+  let distributionMode averageMaxSpeed / distributionRange
+  ; Alpha controls skewness, adjust for more/less skew; fixed arbitrarly
+  let alpha 2
+  ; Beta controls skewness, adjust for more/less skew; derived from mode solution = (alpha - 1) / (alpha + beta - 2)
+  let beta ((alpha - 1) / distributionMode) - alpha + 2
+  let beta-sample random-float 1
+  if beta-sample <= 0 [ set beta-sample 0.00001 ]
+  if beta-sample >= 1 [ set beta-sample 0.99999 ]
+  let x-value (minSpeed + distributionRange * ((random-exponential (alpha * beta-sample)) ^ (1 / beta)))
+  report x-value
+end
+
 to-report convert-kmperh-to-patchpersec [ kmperh ]
   ; km/h -> m/sec -> patch/sec
   let mpersec kmperh * (1000 / 3600)
@@ -1608,6 +1637,12 @@ end
 to-report convert-ticks-to-remainder-seconds
 
   report ticks mod 60
+
+end
+
+to-report clamp0100 [ value ]
+
+  report min (list (max (list value 0)) 100)
 
 end
 @#$#@#$#@
@@ -1673,10 +1708,10 @@ NIL
 1
 
 PLOT
-1074
-173
-1383
-323
+648
+373
+957
+493
 height
 height (m)
 NIL
@@ -1686,16 +1721,16 @@ NIL
 10.0
 true
 true
-"set-plot-x-range 0 ceiling (1.1 * max (list (max [height] of hunters) (max [height] of preys)))" ""
+"set-plot-x-range 0 ceiling (1.1 * max (list (max [height] of hunters) (max [height] of preys)))\nset-histogram-num-bars 20" ""
 PENS
 "preys" 1.0 1 -4079321 true "set-plot-pen-interval 0.1\nhistogram [height] of preys" "set-plot-pen-interval 0.1\nhistogram [height] of preys"
 "hunters" 1.0 1 -5298144 true "set-plot-pen-interval 0.1\nhistogram [height] of hunters" "set-plot-pen-interval 0.1\nhistogram [height] of hunters"
 
 PLOT
-1075
-328
-1385
-478
+648
+729
+958
+849
 time to exhaustion (TTE)
 TTE (seconds)
 NIL
@@ -1705,7 +1740,7 @@ NIL
 10.0
 true
 true
-"set-plot-x-range 0 ceiling (1.1 * max (list (max [time-to-exhaustion] of hunters) (max [time-to-exhaustion] of preys)))\n" ""
+"set-plot-x-range 0 ceiling (1.1 * max (list (max [time-to-exhaustion] of hunters) (max [time-to-exhaustion] of preys)))\nset-histogram-num-bars 20" ""
 PENS
 "preys" 1.0 1 -4079321 true "histogram [time-to-exhaustion] of preys" "histogram [time-to-exhaustion] of preys"
 "hunters" 1.0 1 -5298144 true "histogram [time-to-exhaustion] of hunters" "histogram [time-to-exhaustion] of hunters"
@@ -1749,10 +1784,10 @@ NIL
 1
 
 PLOT
-1053
-20
-1422
-170
+631
+102
+1000
+222
 obstacles
 patch obstacle height (m)
 NIL
@@ -1847,10 +1882,10 @@ m height
 HORIZONTAL
 
 SLIDER
-831
-122
-1045
-155
+627
+277
+841
+310
 par_starting-point-buffer-distance
 par_starting-point-buffer-distance
 0
@@ -1862,10 +1897,10 @@ Km
 HORIZONTAL
 
 SLIDER
-630
-154
-999
-187
+628
+307
+997
+340
 par_obstacle-damage
 par_obstacle-damage
 0
@@ -1877,10 +1912,10 @@ m height (obstacle) / 1 m height (body) * 1 sec
 HORIZONTAL
 
 SLIDER
-630
-188
-1000
-221
+628
+341
+998
+374
 par_track-mark-probability
 par_track-mark-probability
 0
@@ -1892,10 +1927,10 @@ par_track-mark-probability
 HORIZONTAL
 
 SLIDER
-628
-122
-832
-155
+627
+245
+831
+278
 par_track-pregeneration-period
 par_track-pregeneration-period
 0
@@ -1928,10 +1963,10 @@ patch-width
 11
 
 SLIDER
-627
-243
-819
-276
+1010
+30
+1202
+63
 par_num-hunters
 par_num-hunters
 0
@@ -1943,30 +1978,30 @@ hunters
 HORIZONTAL
 
 TEXTBOX
-630
-224
-780
-242
+1013
+11
+1163
+29
 Hunters
 14
 0.0
 1
 
 TEXTBOX
-870
-223
-1020
-241
+1253
+10
+1403
+28
 Preys
 14
 0.0
 1
 
 SLIDER
-641
-374
-832
-407
+1024
+158
+1215
+191
 par_hunters_height_min
 par_hunters_height_min
 1
@@ -1978,10 +2013,10 @@ m
 HORIZONTAL
 
 SLIDER
-640
-408
-831
-441
+1023
+192
+1214
+225
 par_hunters_height_max
 par_hunters_height_max
 par_hunters_height_min
@@ -1993,10 +2028,10 @@ m
 HORIZONTAL
 
 SLIDER
-645
-542
-836
-575
+1028
+326
+1219
+359
 par_hunters_speed_min
 par_hunters_speed_min
 1
@@ -2008,10 +2043,10 @@ km/h
 HORIZONTAL
 
 SLIDER
-644
-579
-837
-612
+1027
+356
+1220
+389
 par_hunters_speed_max
 par_hunters_speed_max
 par_hunters_speed_min
@@ -2023,10 +2058,10 @@ km/h
 HORIZONTAL
 
 SLIDER
-645
-660
-835
-693
+1032
+471
+1222
+504
 par_hunters_tte_min
 par_hunters_tte_min
 1
@@ -2038,10 +2073,10 @@ minutes
 HORIZONTAL
 
 SLIDER
-645
-694
-836
-727
+1032
+505
+1223
+538
 par_hunters_tte_max
 par_hunters_tte_max
 par_hunters_tte_min
@@ -2053,10 +2088,10 @@ minutes
 HORIZONTAL
 
 SLIDER
-634
-735
-848
-768
+1021
+546
+1235
+579
 par_hunters_reactiontime_min
 par_hunters_reactiontime_min
 1
@@ -2068,10 +2103,10 @@ seconds
 HORIZONTAL
 
 SLIDER
-634
-768
-848
-801
+1021
+579
+1235
+612
 par_hunters_reactiontime_max
 par_hunters_reactiontime_max
 par_hunters_reactiontime_min
@@ -2083,10 +2118,10 @@ seconds
 HORIZONTAL
 
 SLIDER
-869
-375
-1060
-408
+1252
+159
+1443
+192
 par_preys_height_min
 par_preys_height_min
 1
@@ -2098,10 +2133,10 @@ m
 HORIZONTAL
 
 SLIDER
-869
-409
-1060
-442
+1252
+193
+1443
+226
 par_preys_height_max
 par_preys_height_max
 par_preys_height_min
@@ -2113,10 +2148,10 @@ m
 HORIZONTAL
 
 SLIDER
-873
-542
-1066
-575
+1256
+326
+1449
+359
 par_preys_speed_min
 par_preys_speed_min
 1
@@ -2128,10 +2163,10 @@ km/h
 HORIZONTAL
 
 SLIDER
-873
-576
-1066
-609
+1256
+360
+1449
+393
 par_preys_speed_max
 par_preys_speed_max
 par_preys_speed_min
@@ -2143,10 +2178,10 @@ km/h
 HORIZONTAL
 
 SLIDER
-869
-658
-1062
-691
+1256
+469
+1449
+502
 par_preys_tte_min
 par_preys_tte_min
 1
@@ -2158,10 +2193,10 @@ minutes
 HORIZONTAL
 
 SLIDER
-869
-693
-1062
-726
+1256
+504
+1449
+537
 par_preys_tte_max
 par_preys_tte_max
 par_preys_tte_min
@@ -2173,10 +2208,10 @@ minutes
 HORIZONTAL
 
 SLIDER
-854
-735
-1069
-768
+1241
+546
+1456
+579
 par_preys_reactiontime_min
 par_preys_reactiontime_min
 1
@@ -2188,10 +2223,10 @@ secs
 HORIZONTAL
 
 SLIDER
-854
-770
-1069
-803
+1241
+581
+1456
+614
 par_preys_reactiontime_max
 par_preys_reactiontime_max
 par_preys_reactiontime_min
@@ -2203,10 +2238,10 @@ secs
 HORIZONTAL
 
 SLIDER
-860
-244
-1050
-277
+1243
+31
+1433
+64
 par_num-preys
 par_num-preys
 0
@@ -2218,10 +2253,10 @@ preys
 HORIZONTAL
 
 SLIDER
-843
-275
-1076
-308
+1226
+62
+1459
+95
 par_preys_group_max_size
 par_preys_group_max_size
 0
@@ -2233,15 +2268,15 @@ preys/group
 HORIZONTAL
 
 MONITOR
-629
-303
-808
-348
-NIL
-planned-waypoints
+1010
+92
+1448
+129
+Planned waypoints
+sort planned-waypoints
 17
 1
-11
+9
 
 SWITCH
 42
@@ -2255,10 +2290,10 @@ display-waypoints
 -1000
 
 SLIDER
-846
-343
-1064
-376
+1229
+127
+1447
+160
 par_preys_safe-distance
 par_preys_safe-distance
 1
@@ -2292,10 +2327,10 @@ convert-ticks-to-remainder-seconds
 11
 
 SLIDER
-631
-805
-849
-838
+1018
+616
+1236
+649
 par_hunters_cooldowntime_min
 par_hunters_cooldowntime_min
 0
@@ -2307,10 +2342,10 @@ secs
 HORIZONTAL
 
 SLIDER
-632
-841
-851
-874
+1019
+652
+1238
+685
 par_hunters_cooldowntime_max
 par_hunters_cooldowntime_max
 par_hunters_cooldowntime_min
@@ -2322,10 +2357,10 @@ secs
 HORIZONTAL
 
 SLIDER
-851
-805
-1069
-838
+1238
+616
+1456
+649
 par_preys_cooldowntime_min
 par_preys_cooldowntime_min
 0
@@ -2337,10 +2372,10 @@ secs
 HORIZONTAL
 
 SLIDER
-851
-840
-1070
-873
+1238
+651
+1457
+684
 par_preys_cooldowntime_max
 par_preys_cooldowntime_max
 par_preys_cooldowntime_min
@@ -2389,10 +2424,10 @@ PENS
 "default" 1.0 0 -16777216 true "" "plot sum [length tracks] of patches"
 
 SLIDER
-641
-341
-832
-374
+1024
+125
+1215
+158
 par_max-shooting-distance
 par_max-shooting-distance
 10
@@ -2415,10 +2450,10 @@ precision (world-width * patch-width * 1E-3) 4
 11
 
 SLIDER
-626
-442
-869
-475
+1009
+226
+1252
+259
 par_hunters_height_stealth
 par_hunters_height_stealth
 0
@@ -2430,10 +2465,10 @@ par_hunters_height_stealth
 HORIZONTAL
 
 SLIDER
-630
-614
-884
-647
+1027
+428
+1281
+461
 par_hunters_speed_stealth
 par_hunters_speed_stealth
 0
@@ -2445,10 +2480,10 @@ par_hunters_speed_stealth
 HORIZONTAL
 
 SLIDER
-587
-879
-852
-912
+974
+690
+1239
+723
 par_hunters_randomwalk_anglerange
 par_hunters_randomwalk_anglerange
 0
@@ -2460,10 +2495,10 @@ degrees
 HORIZONTAL
 
 SLIDER
-854
-878
-1109
-911
+1241
+689
+1496
+722
 par_preys_randomwalk_anglerange
 par_preys_randomwalk_anglerange
 0
@@ -2475,70 +2510,70 @@ degrees
 HORIZONTAL
 
 SLIDER
-626
-477
-870
-510
-par_hunters_visual_acuity_min
-par_hunters_visual_acuity_min
+1010
+261
+1252
+294
+par_hunters_visualacuity_mean
+par_hunters_visualacuity_mean
 0
 100
-50.0
+65.0
 1
 1
 % max. dist.
 HORIZONTAL
 
 SLIDER
-870
-476
-1099
-509
-par_preys_visual_acuity_min
-par_preys_visual_acuity_min
+1253
+260
+1489
+293
+par_preys_visualacuity_mean
+par_preys_visualacuity_mean
 0
 100
-50.0
+33.0
 1
 1
 % max. dist.
 HORIZONTAL
 
 SLIDER
-627
-509
-871
-542
-par_hunters_visual_acuity_max
-par_hunters_visual_acuity_max
+1015
+293
+1240
+326
+par_hunters_visualacuity_sd
+par_hunters_visualacuity_sd
 0
 100
-100.0
+15.0
 1
 1
 % max. dist.
 HORIZONTAL
 
 SLIDER
-870
-508
-1106
-541
-par_preys_visual_acuity_max
-par_preys_visual_acuity_max
+1253
+292
+1473
+325
+par_preys_visualacuity_sd
+par_preys_visualacuity_sd
 0
 100
-100.0
+20.0
 1
 1
 % max. dist.
 HORIZONTAL
 
 SLIDER
-627
-273
-843
-306
+1010
+60
+1226
+93
 par_num-planned-waypoints
 par_num-planned-waypoints
 1
@@ -2550,14 +2585,120 @@ waypoints
 HORIZONTAL
 
 TEXTBOX
-633
-106
-783
-124
+632
+229
+782
+247
 Contextual
 14
 0.0
 1
+
+SLIDER
+1256
+392
+1448
+425
+par_preys_speed_avmax
+par_preys_speed_avmax
+par_preys_speed_min
+par_preys_speed_max
+30.0
+1
+1
+km/h
+HORIZONTAL
+
+SLIDER
+1027
+386
+1221
+419
+par_hunters_speed_avmax
+par_hunters_speed_avmax
+par_hunters_speed_min
+par_hunters_speed_max
+15.0
+1
+1
+km/h
+HORIZONTAL
+
+PLOT
+648
+492
+956
+612
+visual acuity
+% of max. dist
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+true
+"set-plot-x-range 0 ceiling (1.1 * max (list (max [visual-acuity] of hunters) (max [visual-acuity] of preys)))\nset-histogram-num-bars 20" ""
+PENS
+"preys" 1.0 1 -4079321 true "" "histogram [visual-acuity] of preys"
+"hunters" 1.0 1 -5298144 true "" "histogram [visual-acuity] of hunters"
+
+PLOT
+648
+611
+955
+731
+Maximum speed (potential)
+patch-width/second
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+true
+"set-plot-x-range 0 ceiling (1.1 * max (list (max [speed-max] of hunters) (max [speed-max] of preys)))\nset-histogram-num-bars 20" ""
+PENS
+"preys" 1.0 1 -4079321 true "" "histogram [speed-max] of preys"
+"hunters" 1.0 0 -5298144 true "" "histogram [speed-max] of hunters"
+
+PLOT
+958
+730
+1219
+850
+Reaction time
+seconds
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+true
+"set-plot-x-range 0 ceiling (1.1 * max (list (max [reaction-time] of hunters) (max [reaction-time] of preys)))\nset-histogram-num-bars 20" ""
+PENS
+"preys" 1.0 1 -4079321 true "" "histogram [reaction-time] of preys"
+"hunters" 1.0 1 -5298144 true "" "histogram [reaction-time] of preys"
+
+PLOT
+1221
+730
+1454
+850
+cooldown time
+seconds
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+true
+"set-plot-x-range 0 ceiling (1.1 * max (list (max [cooldown-time] of hunters) (max [cooldown-time] of preys)))\nset-histogram-num-bars 20" ""
+PENS
+"default" 1.0 1 -4079321 true "" "histogram [cooldown-time] of preys"
+"pen-1" 1.0 1 -5298144 true "" "histogram [cooldown-time] of hunters"
 
 @#$#@#$#@
 ## WHAT IS IT?
