@@ -152,7 +152,7 @@ preys-own
 track-makers-own
 [
   owner
-  duration
+  maximum-track-antiquity
 ]
 
 patches-own
@@ -186,9 +186,9 @@ to setup
 
   initialise-output
 
-  update-display
-
   reset-ticks
+
+  update-display
 
 end
 
@@ -397,7 +397,7 @@ end
 
 to generate-recent-tracks
 
-  let trackPregenerationPeriodInSeconds track-pregeneration-period * 60 * 60 ;;; hours -> seconds
+  let trackPregenerationPeriodInSeconds convert-hours-to-seconds track-pregeneration-period
 
   ask preys
   [
@@ -405,7 +405,7 @@ to generate-recent-tracks
     [
       let me self
       set owner [group_id] of myself
-      set duration 1 + random trackPregenerationPeriodInSeconds
+      set maximum-track-antiquity trackPregenerationPeriodInSeconds
       set heading (mean [heading] of preys with [group_id = [owner] of me]) - 180
     ]
   ]
@@ -415,19 +415,19 @@ to generate-recent-tracks
     let me self
     let previousTrackMarkProbability track-mark-probability * 100 * (mean [height] of preys with [group_id = [owner] of me]) * (count preys with [group_id = [owner] of me])
     let obstacleDamage obstacle-damage * (mean [height] of preys with [group_id = [owner] of me]) * (count preys with [group_id = [owner] of me])
-    let remainingDuration duration
+    let trackAntiquity 0
 
     ;;; shuffle within neighbors to emulate group distribution
     ;move-to one-of neighbors
 
-    repeat duration
+    while [ trackAntiquity < maximum-track-antiquity ]
     [
       set obstacle max (list 0 (obstacle - obstacleDamage))
 
       if (previousTrackMarkProbability > random-float 100)
       [
         let preyLeavingTrack one-of preys with [group_id = [owner] of me]
-        add-track-from preyLeavingTrack (heading) (0 - remainingDuration)
+        add-track-from preyLeavingTrack (heading) (0 - trackAntiquity)
       ]
 
       if (count neighbors < 8) [ die ] ;;; delete once it reaches the edges of the area
@@ -443,7 +443,7 @@ to generate-recent-tracks
 
         fd 1
       ]
-      set remainingDuration remainingDuration - 1
+      set trackAntiquity trackAntiquity + 1
     ]
 
     die
@@ -650,6 +650,9 @@ to hunter-sighting-move
 
   if (print-messages) [ print (word "hunter " who " sees prey" ([who] of preys-in-sight)) ]
 
+  ;;; reset follow-track-target (sighting takes priority)
+  set follow-track-target nobody
+
   ifelse (reaction-counter > 0)
   [
     if (print-messages) [ print (word "thinking... " reaction-counter " secs to reaction") ]
@@ -701,6 +704,9 @@ to hunter-shoot [ aPrey ]
 
   let me self
 
+  ;;; reset approaching-target
+  set approaching-target nobody
+
   ;;; reset pursuing-target
   set pursuing-target nobody
 
@@ -725,11 +731,18 @@ to hunter-shoot [ aPrey ]
       ]
     ]
 
-    ;;; delete the prey agent
+    ;;; the prey agent is alerted and will start to flee
     ask aPrey
     [
-      die
+      ;die
+      set any-unseen-target true
+      set unseen-target-location (patch-set ([patch-here] of me))
     ]
+
+    ;;; signal successful hunt and head back to camp
+    set planned-waypoints (patch-set starting-point)
+    save-hunting-mode "SUCCESSFUL-SHOT"
+    save-hunting-mode "BACK-TO-CAMP"
   ]
   [
     ;;; FAIL
@@ -759,6 +772,9 @@ to hunter-approach [ aPrey ]
 
   if (print-messages) [ print (word "hunter " who " approaches prey " ([who] of aPrey)) ]
 
+  ;;; reset pursuing-target
+  set pursuing-target nobody
+
   set approaching-target aPrey
 
   set stealth true
@@ -776,6 +792,12 @@ end
 to hunter-memory-move
 
   save-hunting-mode "APPROACH-BLIND"
+
+  ;;; reset approaching-target
+  set approaching-target nobody
+
+  ;;; reset pursuing-target
+  set pursuing-target nobody
 
   let me self
   let unseenTarget min-one-of unseen-target-location [distance me]
@@ -866,6 +888,12 @@ to hunter-default-move
   ;;; stand, if stealth
   set stealth false
 
+  ;;; reset approaching-target
+  set approaching-target nobody
+
+  ;;; reset pursuing-target
+  set pursuing-target nobody
+
   let tracksHere get-all-tracks-but-hunters tracks
 
   ;;; search for tracks
@@ -926,24 +954,33 @@ to hunter-communicate
 
   ask receivers
   [
+    ;;; communicate stealth
+    if ([stealth] of me)
+    [
+      set stealth true
+    ]
+
     ;;; add unseen location to any other already in memory
     set unseen-target-location (patch-set ([unseen-target-location] of me) unseen-target-location)
 
     ;;; get track target if not already following one
-    if (follow-track-target = nobody)
+    if (follow-track-target = nobody and [follow-track-target] of me != nobody)
     [
+      save-hunting-mode "TRACK"
       set follow-track-target [follow-track-target] of me
     ]
 
     ;;; get approaching target if not already following one
-    if (approaching-target = nobody)
+    if (approaching-target = nobody and [approaching-target] of me != nobody)
     [
+      save-hunting-mode "APPROACH-STEALTH"
       set approaching-target [approaching-target] of me
     ]
 
     ;;; get pursuing target if not already following one
-    if (pursuing-target = nobody)
+    if (pursuing-target = nobody and [pursuing-target] of me != nobody)
     [
+      save-hunting-mode "PURSUE"
       set pursuing-target [pursuing-target] of me
     ]
   ]
@@ -968,7 +1005,7 @@ to check-escape-condition ;;; preys
   if (count [neighbors4] of patch-here < 4)
   [
     if (print-messages) [ print (word "Prey " who " and group " group_id " escaped from hunting area") ]
-    ask other preys with [group_id = [group_id] of myself] [ die ]
+    ;ask other preys with [group_id = [group_id] of myself] [ die ]
     die
   ]
 
@@ -1529,16 +1566,9 @@ to paint-patches
     [ set pcolor scale-color grey (elevation + obstacle) min-height max-height ]
     if (display-mode = "prey-attraction")
     [ set pcolor scale-color red (prey-attraction) min-attraction max-attraction ]
-    if (display-mode = "tracks")
+    if (display-mode = "tracks (individuals)")
     [
-      set pcolor black
-
-      let track-owners get-track-owners tracks
-
-      if (length track-owners > 0)
-      [
-        set pcolor [color] of first track-owners
-      ]
+      paint-track-individual
     ]
   ]
 
@@ -1553,20 +1583,25 @@ to paint-patches
 
 end
 
-to-report get-track-owners [ trackList ]
+to paint-track-individual
 
-  let trackOwners []
+  set pcolor black
 
-  foreach trackList
+  if (length tracks > 0)
   [
-    aTrack ->
-    set trackOwners lput (item 0 aTrack) trackOwners
+    let mostRecentTrack first tracks
+    let mostRecentTrackOwner item 0 mostRecentTrack
+    let mostRecentTrackAntiquity ticks - (item 2 mostRecentTrack)
+    let gradientReference ticks + (convert-hours-to-seconds track-pregeneration-period)
+    ifelse (mostRecentTrackOwner != nobody)
+    [
+      set pcolor [color] of mostRecentTrackOwner
+    ]
+    [
+      set pcolor 1
+    ]
+    set pcolor pcolor + (-3 + 6 * (1 - mostRecentTrackAntiquity / gradientReference))
   ]
-
-  ;;; ensure to get those still around
-  set trackOwners filter [i -> i != nobody] trackOwners
-
-  report trackOwners
 
 end
 
@@ -1622,21 +1657,27 @@ to-report convert-kmperh-to-patchpersec [ kmperh ]
   report patchpersec
 end
 
-to-report convert-ticks-to-hours
+to-report convert-seconds-to-hours [ timeInSeconds ]
 
-  report floor (ticks / 3600)
-
-end
-
-to-report convert-ticks-to-remainder-minutes
-
-  report floor (ticks / 60)
+  report floor (timeInSeconds / 3600)
 
 end
 
-to-report convert-ticks-to-remainder-seconds
+to-report convert-hours-to-seconds [ timeInHours ]
 
-  report ticks mod 60
+  report timeInHours * 3600
+
+end
+
+to-report convert-seconds-to-minutes [ timeInSeconds ]
+
+  report floor (timeInSeconds / 60)
+
+end
+
+to-report convert-seconds-to-remainder-seconds [ timeInSeconds ]
+
+  report timeInSeconds mod 60
 
 end
 
@@ -1763,7 +1804,7 @@ CHOOSER
 205
 display-mode
 display-mode
-"elevation" "obstacle" "elevation+obstacle" "prey-attraction" "tracks"
+"elevation" "obstacle" "elevation+obstacle" "prey-attraction" "tracks (individuals)"
 4
 
 BUTTON
@@ -1835,7 +1876,7 @@ MONITOR
 87
 56
 hours
-convert-ticks-to-hours
+convert-seconds-to-hours ticks
 17
 1
 11
@@ -1846,7 +1887,7 @@ MONITOR
 136
 56
 minutes
-convert-ticks-to-remainder-minutes
+convert-seconds-to-minutes ticks
 17
 1
 11
@@ -1971,7 +2012,7 @@ par_num-hunters
 par_num-hunters
 0
 10
-1.0
+3.0
 1
 1
 hunters
@@ -2311,7 +2352,7 @@ SWITCH
 326
 print-messages
 print-messages
-0
+1
 1
 -1000
 
@@ -2321,7 +2362,7 @@ MONITOR
 195
 55
 seconds
-convert-ticks-to-remainder-seconds
+convert-seconds-to-remainder-seconds ticks
 17
 1
 11
@@ -2578,7 +2619,7 @@ par_num-planned-waypoints
 par_num-planned-waypoints
 1
 10
-3.0
+5.0
 1
 1
 waypoints
