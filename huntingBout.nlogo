@@ -341,54 +341,55 @@ to setup-prey-groups
   create-preys num-preys
   [
     set height preys_height_min + random-float (preys_height_max - preys_height_min)
-    set visual-acuity min (list (random-normal preys_visualacuity_mean preys_visualacuity_sd) 100)
+    set visual-acuity min list (random-normal preys_visualacuity_mean preys_visualacuity_sd) 100
     set speed-max sample-skewed-speed preys_speed_min preys_speed_max preys_speed_avmax
 
-    set time-to-exhaustion preys_tte_min + random (preys_tte_max - preys_tte_min)
-    set time-to-exhaustion time-to-exhaustion * 60 ; convert minutes to seconds
+    set time-to-exhaustion (preys_tte_min + random (preys_tte_max - preys_tte_min)) * 60
     set reaction-time preys_reactiontime_min + random (preys_reactiontime_max - preys_reactiontime_min)
     set cooldown-time preys_cooldowntime_min + random (preys_cooldowntime_max - preys_cooldowntime_min)
 
     set group-leader false
-
     set any-unseen-target false
-    set unseen-target-location (patch-set)
-
+    set unseen-target-location no-patches
     set moved-this-turn false
-
     set shape "sheep"
   ]
 
+  ;; Initialize variables for grouping
   let unassigned preys
   let currentID 0
+  let buffer-distance starting-point-buffer-distance * 1000 / patch-width ;;; km -> m -> patch widths
+  let valid-initial-positions patches with [distance starting-point > buffer-distance]
 
-  let bufferDistance starting-point-buffer-distance * 1000 / patch-width ;;; km -> m -> patch widths
-  let validInitialPositions patches with [distance starting-point > bufferDistance]
-
+  ;; Group assignment loop
   while [any? unassigned]
   [
-    let group_size 1 + random (min (list preys_group_max_size (count unassigned)))
-    ask n-of group_size unassigned
+    let groupSize min list preys_group_max_size (count unassigned)
+    let newGroupMembers n-of (1 + random groupSize) unassigned
+    ask newGroupMembers
     [
       set group_id currentID
-
-      set unassigned other unassigned
     ]
 
-    ask one-of validInitialPositions
-    [
-      let me self
-      ask preys with [group_id = currentID]
-      [
-        move-to me
-        move-to one-of neighbors ;;; shuffle initial position around group center
-      ]
-    ]
-
-    ask one-of preys with [group_id = currentID]
+    ;; Assign group leader
+    ask one-of newGroupMembers
     [
       set group-leader true
     ]
+
+    ;; Position the group
+    let preyPosition one-of valid-initial-positions
+    ask preys with [group_id = currentID]
+    [
+      move-to preyPosition
+      if (not group-leader)
+      [
+        ;;; shuffle initial position around leader
+        move-to one-of neighbors
+      ]
+    ]
+
+    set unassigned unassigned with [not member? self newGroupMembers]
 
     set currentID currentID + 1
   ]
@@ -844,30 +845,35 @@ to prey-default-move
 
   ;;; *Define target heading* ;;;
 
-  ;;; First priority: staying in an attractive patch (or moving out from unattractive ones)
+  ;;; First priority: keeping the group together
+  ;;; NOTE: checks if all group members are in sight and, if so, head towards the closest one
+  let myGroupId group_id
+  let groupMembers preys with [group_id = myGroupId]
+  let groupMembersNotInSight other groupMembers with [not presence-detected-by myself]
+  let groupLeader one-of groupMembers with [group-leader]
 
-  ;;; get a relative measure of how attractive is the current patch
-  let patch-pull 0
-  if (prey-attraction-max > 0)
-  [ set patch-pull 100 * ([prey-attraction] of patch-here) / prey-attraction-max ]
+  let leaderNotInSight false
+  if (not group-leader and count groupMembers > 1) [ set leaderNotInSight member? groupLeader groupMembersNotInSight ]
 
-  if (random-float 100 > patch-pull)
+  ifelse (leaderNotInSight)
   [
-    ;;; Second priority: keeping the group together
-    ;;; NOTE: checks if all group members are in sight and, if so, head towards the closest one
-    let myGroupId group_id
-    let groupMembers other preys with [group_id = myGroupId]
-    let groupMembersNotInSight groupMembers with [not presence-detected-by myself]
-
-    if (any? groupMembersNotInSight and not group-leader and count groupMembers > 0 );and count groupMembers = count groupMembersNotInSight)
-    [
-      face min-one-of groupMembersNotInSight [distance myself]
-    ]
-
-    ;;; add random direction biased by default heading
-    rt (- (preys_randomwalk_anglerange / 2) + random preys_randomwalk_anglerange)
-
+    face groupLeader
     set moving true
+  ]
+  [
+    ;;; Second priority: staying in an attractive patch (or moving out from unattractive ones)
+    ;;; get a relative measure of how attractive is the current patch
+    let patch-pull 0
+    if (prey-attraction-max > 0)
+    [ set patch-pull 100 * ([prey-attraction] of patch-here) / prey-attraction-max ]
+
+    if (random-float 100 > patch-pull)
+    [
+      ;;; if patch-pull is low enough, move.
+      ;;; add random direction biased by default heading
+      rt (- (preys_randomwalk_anglerange / 2) + random preys_randomwalk_anglerange)
+      set moving true
+    ]
   ]
 
   ;;; *Move towards target heading* ;;;
@@ -1005,7 +1011,7 @@ to check-escape-condition ;;; preys
   if (count [neighbors4] of patch-here < 4)
   [
     if (print-messages) [ print (word "Prey " who " and group " group_id " escaped from hunting area") ]
-    ;ask other preys with [group_id = [group_id] of myself] [ die ]
+    ask other preys with [group_id = [group_id] of myself] [ die ]
     die
   ]
 
@@ -1566,9 +1572,13 @@ to paint-patches
     [ set pcolor scale-color grey (elevation + obstacle) min-height max-height ]
     if (display-mode = "prey-attraction")
     [ set pcolor scale-color red (prey-attraction) min-attraction max-attraction ]
-    if (display-mode = "tracks (individuals)")
+    if (display-mode = "tracks (prey)")
     [
-      paint-track-individual
+      paint-track-individual preys
+    ]
+    if (display-mode = "tracks (hunters)")
+    [
+      paint-track-individual hunters
     ]
   ]
 
@@ -1583,7 +1593,7 @@ to paint-patches
 
 end
 
-to paint-track-individual
+to paint-track-individual [ aBreed ]
 
   set pcolor black
 
@@ -1595,12 +1605,18 @@ to paint-track-individual
     let gradientReference ticks + (convert-hours-to-seconds track-pregeneration-period)
     ifelse (mostRecentTrackOwner != nobody)
     [
-      set pcolor [color] of mostRecentTrackOwner
+      if ([breed] of mostRecentTrackOwner = aBreed)
+      [
+        set pcolor [color] of mostRecentTrackOwner
+      ]
     ]
     [
       set pcolor 1
     ]
-    set pcolor pcolor + (-3 + 6 * (1 - mostRecentTrackAntiquity / gradientReference))
+    if (pcolor != black)
+    [
+      set pcolor pcolor + (-3 + 3 * (1 - mostRecentTrackAntiquity / gradientReference))
+    ]
   ]
 
 end
@@ -1792,7 +1808,7 @@ INPUTBOX
 99
 158
 SEED
-0.0
+123.0
 1
 0
 Number
@@ -1804,8 +1820,8 @@ CHOOSER
 205
 display-mode
 display-mode
-"elevation" "obstacle" "elevation+obstacle" "prey-attraction" "tracks (individuals)"
-4
+"elevation" "obstacle" "elevation+obstacle" "prey-attraction" "tracks (prey)" "tracks (hunters)"
+5
 
 BUTTON
 42
@@ -2287,7 +2303,7 @@ par_num-preys
 par_num-preys
 0
 100
-15.0
+24.0
 1
 1
 preys
