@@ -65,7 +65,7 @@ globals
   prey-attractor-probability
 
   ;;; variables
-  prey-attraction-max
+  attractiveness-to-prey-max
 
   planned-waypoints
   visited-planned-waypoints
@@ -107,6 +107,8 @@ hunters-own
   follow-track-target
   approaching-target
   pursuing-target
+
+  approach-path
 
   reaction-counter
   relax-counter
@@ -159,9 +161,15 @@ patches-own
 [
   elevation
   obstacle
-  prey-attraction
+  attractiveness-to-prey
 
   tracks
+
+  ;;; path-finding related
+  parent-patch ; patch's predecessor
+  f ; the value of knowledge plus heuristic cost function f()
+  g ; the value of knowledge cost function g()
+  h ; the value of heuristic cost function h()
 ]
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -314,22 +322,24 @@ to setup-environment
   ask patches
   [
     set elevation random-float 10
-    set obstacle (random-float 1) * (random-float 1) * init-obstacle-scale
-    set prey-attraction 0
-    if (random-float 100 < prey-attractor-probability) [ set prey-attraction 100 ]
+    set obstacle 0;(random-float 1) * (random-float 1) * init-obstacle-scale
+    set attractiveness-to-prey 0
+    if (random-float 100 < prey-attractor-probability) [ set attractiveness-to-prey 100 ]
 
     set tracks []
   ]
 
   repeat 10 [ diffuse elevation 0.5 ]
 
-  ;repeat 10 [ diffuse obstacle 0.3 ]
 
-  repeat 10 [ diffuse prey-attraction 0.3 ]
+  ask n-of 2000 patches [ set obstacle init-obstacle-scale ]
+  repeat 10 [ diffuse obstacle 0.3 ]
 
-  set prey-attraction-max max [prey-attraction] of patches
+  repeat 10 [ diffuse attractiveness-to-prey 0.3 ]
 
-;  ask patches with [pxcor = -10 and (pycor < -10 or pycor > 10)]
+  set attractiveness-to-prey-max max [attractiveness-to-prey] of patches
+
+;  ask patches with [pxcor = floor (world-width / 2) and (pycor < floor ((world-height / 2) - 10) or pycor > floor ((world-height / 2) + 10))]
 ;  [
 ;    set obstacle 5
 ;  ]
@@ -435,8 +445,8 @@ to generate-recent-tracks
 
       ;;; get a relative measure of how attractive is the current patch
       let patch-pull 0
-      if (prey-attraction-max > 0)
-      [ set patch-pull 100 * ([prey-attraction] of patch-here) / prey-attraction-max ]
+      if (attractiveness-to-prey-max > 0)
+      [ set patch-pull 100 * ([attractiveness-to-prey] of patch-here) / attractiveness-to-prey-max ]
 
       if (random-float 100 > patch-pull)
       [
@@ -476,6 +486,8 @@ to setup-hunting-party
       set follow-track-target nobody
       set approaching-target nobody
       set pursuing-target nobody
+
+      set approach-path []
 
       set stealth false
 
@@ -765,7 +777,7 @@ to hunter-pursue [ aPrey ]
 
   face aPrey
 
-  fd MoveDistance
+  make-a-move speed-max speed-max
 
 end
 
@@ -780,13 +792,12 @@ to hunter-approach [ aPrey ]
 
   set stealth true
 
-  let MoveDistance (get-speed-in-patch hunters_speed_stealth patch-here)
+  ;;; find path with most obstacles (hiding)
+  ;;; TO-DO: correct direction to account for smell (test wind)
+  set approach-path find-a-path patch-here [patch-here] of aPrey
+  face item 1 approach-path ;;; face towards the next patch in the path
 
-  face aPrey
-
-  ;;; TO-DO: correct direction to account for obstacle (find protection) and smell (test wind)
-
-  fd MoveDistance
+  make-a-move hunters_speed_stealth speed-max
 
 end
 
@@ -806,7 +817,7 @@ to hunter-memory-move
   ;;; continue towards the point of last sighting
   face unseenTarget
 
-  make-a-move heading hunters_speed_min speed-max
+  make-a-move hunters_speed_min speed-max
 
   ;;; forget unseen target if already there
   if (unseenTarget = patch-here)
@@ -825,7 +836,7 @@ to prey-memory-move
   face unseenTarget
   set heading heading - 180
 
-  make-a-move heading preys_speed_min speed-max
+  make-a-move preys_speed_min speed-max
 
   ;;; forget unseen target if safe enough distance
   if (distance unseenTarget >= preys_safe-distance)
@@ -864,8 +875,8 @@ to prey-default-move
     ;;; Second priority: staying in an attractive patch (or moving out from unattractive ones)
     ;;; get a relative measure of how attractive is the current patch
     let patch-pull 0
-    if (prey-attraction-max > 0)
-    [ set patch-pull 100 * ([prey-attraction] of patch-here) / prey-attraction-max ]
+    if (attractiveness-to-prey-max > 0)
+    [ set patch-pull 100 * ([attractiveness-to-prey] of patch-here) / attractiveness-to-prey-max ]
 
     if (random-float 100 > patch-pull)
     [
@@ -880,7 +891,7 @@ to prey-default-move
 
   if (moving)
   [
-    make-a-move heading preys_speed_min speed-max
+    make-a-move preys_speed_min speed-max
   ]
 
 end
@@ -924,7 +935,7 @@ to hunter-default-move
   ]
 
   ;;; move
-  make-a-move heading hunters_speed_min speed-max
+  make-a-move hunters_speed_min speed-max
 
 end
 
@@ -1321,9 +1332,9 @@ to move-away-from [ someTurtles ]
     set desiredSpeed speed-max
   ]
 
-  let oppositeHeading towards closestTurtle - 180
+  set heading (towards closestTurtle - 180)
 
-  make-a-move oppositeHeading desiredSpeed speed-max
+  make-a-move desiredSpeed speed-max
 
   if (print-messages) [ print (word "distance after: " (distance closestTurtle)) ]
 
@@ -1351,9 +1362,9 @@ to move-along-with [ someTurtles ]
     set desiredSpeed speed-max
   ]
 
-  let fleeingHeading [heading] of closestTurtle
+  set heading [heading] of closestTurtle
 
-  make-a-move fleeingHeading desiredSpeed speed-max
+  make-a-move desiredSpeed speed-max
 
   if (print-messages) [ print (word "distance after: " (distance closestTurtle)) ]
 
@@ -1383,27 +1394,22 @@ end
 ;
 ;end
 
-to make-a-move [ aHeading aSpeed maxSpeed ]
+to make-a-move [ desiredSpeed maxSpeed ]
 
   ;;; wrapper where an agent will move itself according to:
-  ;;; - explicitly given heading
-  ;;; - desired speed (actual speed depending on terrain)
+  ;;; - current heading (implicit)
+  ;;; - desired speed (actual speed depending on patch-here)
   ;;; - maximum speed for this individual, which is considered to regulate exertion
 
-  move-with-heading-and-speed-here aHeading aSpeed
+  move-with-speed-here desiredSpeed
 
-  apply-exertion aSpeed maxSpeed
+  apply-exertion desiredSpeed maxSpeed
 
 end
 
-to move-with-heading-and-speed-here [ aHeading aSpeed ]
-
-  ;;; keep track of the target heading
-  let targetHeading aHeading
+to move-with-speed-here [ aSpeed ]
 
   let MoveDistance (get-speed-in-patch aSpeed patch-here)
-
-  set heading (get-best-route-heading targetHeading moveDistance)
 
   fd MoveDistance
 
@@ -1559,8 +1565,9 @@ to paint-patches
   let max-obstacle max [obstacle] of patches
   let min-height min [elevation + obstacle] of patches
   let max-height max [elevation + obstacle] of patches
-  let min-attraction min [prey-attraction] of patches
-  let max-attraction max [prey-attraction] of patches
+  let min-attraction min [attractiveness-to-prey] of patches
+  let max-attraction max [attractiveness-to-prey] of patches
+  let tracksGradientReference ticks - (min [item 2 (first tracks)] of patches with [length tracks > 0])
 
   ask patches
   [
@@ -1570,15 +1577,15 @@ to paint-patches
     [ set pcolor scale-color green obstacle min-obstacle max-obstacle ]
     if (display-mode = "elevation+obstacle")
     [ set pcolor scale-color grey (elevation + obstacle) min-height max-height ]
-    if (display-mode = "prey-attraction")
-    [ set pcolor scale-color red (prey-attraction) min-attraction max-attraction ]
+    if (display-mode = "attractiveness-to-prey")
+    [ set pcolor scale-color red (attractiveness-to-prey) min-attraction max-attraction ]
     if (display-mode = "tracks (prey)")
     [
-      paint-track-individual preys
+      paint-track-individual preys tracksGradientReference
     ]
     if (display-mode = "tracks (hunters)")
     [
-      paint-track-individual hunters
+      paint-track-individual hunters tracksGradientReference
     ]
   ]
 
@@ -1593,7 +1600,7 @@ to paint-patches
 
 end
 
-to paint-track-individual [ aBreed ]
+to paint-track-individual [ aBreed gradientReference ]
 
   set pcolor black
 
@@ -1602,20 +1609,21 @@ to paint-track-individual [ aBreed ]
     let mostRecentTrack first tracks
     let mostRecentTrackOwner item 0 mostRecentTrack
     let mostRecentTrackAntiquity ticks - (item 2 mostRecentTrack)
-    let gradientReference ticks + (convert-hours-to-seconds track-pregeneration-period)
+
     ifelse (mostRecentTrackOwner != nobody)
     [
       if ([breed] of mostRecentTrackOwner = aBreed)
       [
         set pcolor [color] of mostRecentTrackOwner
+        set pcolor pcolor + (-3 + 3 * (1 - mostRecentTrackAntiquity / gradientReference))
       ]
     ]
     [
-      set pcolor 1
-    ]
-    if (pcolor != black)
-    [
-      set pcolor pcolor + (-3 + 3 * (1 - mostRecentTrackAntiquity / gradientReference))
+      if (aBreed = preys)
+      [
+        ;;; dark grey if track owner no longer in area
+        set pcolor 1
+      ]
     ]
   ]
 
@@ -1644,6 +1652,129 @@ to update-hunters-shape
       set shape "person"
     ]
   ]
+
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; A* path finding algorithm ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; modified from Meghendra Singh's Astardemo1 model in NetLogo User Community Models
+; http://ccl.northwestern.edu/netlogo/models/community/Astardemo1
+; modified lines/fragments are marked with ";-------------------------------*"
+; In this version, patches have different movement cost.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; the actual implementation of the A* path finding algorithm
+; it takes the source and destination patches as inputs
+; and reports the optimal path if one exists between them as output
+to-report find-a-path [ source-patch destination-patch]
+
+  ; initialize all variables to default values
+  let search-done? false
+  let search-path []
+  let current-patch 0
+  let open [] ;-------------------------------*
+  let closed [] ;-------------------------------*
+
+  ;-------------------------------*
+  ask patches with [ f != 0 ]
+  [
+    set f 0
+    set h 0
+    set g 0
+  ]
+  ;-------------------------------*
+
+  ; add source patch in the open list
+  set open lput source-patch open
+
+  ; loop until we reach the destination or the open list becomes empty
+  while [ search-done? != true]
+  [
+    ifelse length open != 0
+    [
+      ; sort the patches in open list in increasing order of their f() values
+      set open sort-by [ [?1 ?2] -> [f] of ?1 < [f] of ?2 ] open
+
+      ; take the first patch in the open list
+      ; as the current patch (which is currently being explored (n))
+      ; and remove it from the open list
+      set current-patch item 0 open
+      set open remove-item 0 open
+
+      ; add the current patch to the closed list
+      set closed lput current-patch closed
+
+      ; explore the Von Neumann (left, right, top and bottom) neighbors of the current patch
+      ask current-patch
+      [
+        ; if any of the neighbors is the destination stop the search process
+        ifelse any? neighbors4 with [ (pxcor = [ pxcor ] of destination-patch) and (pycor = [pycor] of destination-patch)] ;-------------------------------*
+        [
+          set search-done? true
+        ]
+        [
+          ; the neighbors should not already explored patches (part of the closed list)
+          ask neighbors4 with [ (not member? self closed) and (self != parent-patch) ] ;-------------------------------*
+          [
+            ; the neighbors to be explored should also not be the source or
+            ; destination patches or already a part of the open list (unexplored patches list)
+            if not member? self open and self != source-patch and self != destination-patch
+            [
+              ;set pcolor 45 ;-------------------------------*
+
+              ; add the eligible patch to the open list
+              set open lput self open
+
+              ; update the path finding variables of the eligible patch
+              set parent-patch current-patch
+              set g [g] of parent-patch - obstacle ;-------------------------------*
+              set h distance destination-patch
+              set f (g + h)
+            ]
+          ]
+        ]
+;        if self != source-patch ;-------------------------------*
+;        [
+;          set pcolor 35
+;        ]
+      ]
+    ]
+    [
+      ; if a path is not found (search is incomplete) and the open list is exhausted
+      ; display a user message and report an empty search path list.
+      user-message( "A path from the source to the destination does not exist." )
+      report []
+    ]
+  ]
+
+  ; if a path is found (search completed) add the current patch
+  ; (node adjacent to the destination) to the search path.
+  set search-path lput current-patch search-path
+
+  ; trace the search path from the current patch
+  ; all the way to the source patch using the parent patch
+  ; variable which was set during the search for every patch that was explored
+  let temp first search-path
+  while [ temp != source-patch ]
+  [
+;    ask temp ;-------------------------------*
+;    [
+;      set pcolor 85
+;    ]
+    set search-path lput [parent-patch] of temp search-path
+    set temp [parent-patch] of temp
+  ]
+
+  ; add the destination patch to the front of the search path
+  set search-path fput destination-patch search-path
+
+  ; reverse the search path so that it starts from a patch adjacent to the
+  ; source patch and ends at the destination patch
+  set search-path reverse search-path
+
+  ; report the search path
+  report search-path
 
 end
 
@@ -1706,8 +1837,8 @@ end
 GRAPHICS-WINDOW
 210
 10
-620
-421
+618
+419
 -1
 -1
 2.0
@@ -1720,10 +1851,10 @@ GRAPHICS-WINDOW
 0
 0
 1
--100
-100
--100
-100
+0
+199
+0
+199
 0
 0
 1
@@ -1816,12 +1947,12 @@ Number
 CHOOSER
 35
 160
-190
+199
 205
 display-mode
 display-mode
-"elevation" "obstacle" "elevation+obstacle" "prey-attraction" "tracks (prey)" "tracks (hunters)"
-5
+"elevation" "obstacle" "elevation+obstacle" "attractiveness-to-prey" "tracks (prey)" "tracks (hunters)"
+1
 
 BUTTON
 42
@@ -2055,10 +2186,10 @@ Preys
 1
 
 SLIDER
-1024
-158
-1215
-191
+1022
+132
+1213
+165
 par_hunters_height_min
 par_hunters_height_min
 1
@@ -2070,10 +2201,10 @@ m
 HORIZONTAL
 
 SLIDER
-1023
-192
-1214
-225
+1021
+166
+1212
+199
 par_hunters_height_max
 par_hunters_height_max
 par_hunters_height_min
@@ -2085,10 +2216,10 @@ m
 HORIZONTAL
 
 SLIDER
-1028
-326
-1219
-359
+1026
+300
+1217
+333
 par_hunters_speed_min
 par_hunters_speed_min
 1
@@ -2100,10 +2231,10 @@ km/h
 HORIZONTAL
 
 SLIDER
-1027
-356
-1220
-389
+1025
+330
+1218
+363
 par_hunters_speed_max
 par_hunters_speed_max
 par_hunters_speed_min
@@ -2115,10 +2246,10 @@ km/h
 HORIZONTAL
 
 SLIDER
-1032
-471
-1222
-504
+1030
+445
+1220
+478
 par_hunters_tte_min
 par_hunters_tte_min
 1
@@ -2130,10 +2261,10 @@ minutes
 HORIZONTAL
 
 SLIDER
-1032
-505
-1223
-538
+1030
+479
+1221
+512
 par_hunters_tte_max
 par_hunters_tte_max
 par_hunters_tte_min
@@ -2145,10 +2276,10 @@ minutes
 HORIZONTAL
 
 SLIDER
-1021
-546
-1235
-579
+1019
+520
+1233
+553
 par_hunters_reactiontime_min
 par_hunters_reactiontime_min
 1
@@ -2160,10 +2291,10 @@ seconds
 HORIZONTAL
 
 SLIDER
-1021
-579
-1235
-612
+1019
+553
+1233
+586
 par_hunters_reactiontime_max
 par_hunters_reactiontime_max
 par_hunters_reactiontime_min
@@ -2175,10 +2306,10 @@ seconds
 HORIZONTAL
 
 SLIDER
-1252
-159
-1443
-192
+1250
+133
+1441
+166
 par_preys_height_min
 par_preys_height_min
 1
@@ -2190,10 +2321,10 @@ m
 HORIZONTAL
 
 SLIDER
-1252
-193
-1443
-226
+1250
+167
+1441
+200
 par_preys_height_max
 par_preys_height_max
 par_preys_height_min
@@ -2205,10 +2336,10 @@ m
 HORIZONTAL
 
 SLIDER
-1256
-326
-1449
-359
+1254
+300
+1447
+333
 par_preys_speed_min
 par_preys_speed_min
 1
@@ -2220,10 +2351,10 @@ km/h
 HORIZONTAL
 
 SLIDER
-1256
-360
-1449
-393
+1254
+334
+1447
+367
 par_preys_speed_max
 par_preys_speed_max
 par_preys_speed_min
@@ -2235,10 +2366,10 @@ km/h
 HORIZONTAL
 
 SLIDER
-1256
-469
-1449
-502
+1254
+443
+1447
+476
 par_preys_tte_min
 par_preys_tte_min
 1
@@ -2250,10 +2381,10 @@ minutes
 HORIZONTAL
 
 SLIDER
-1256
-504
-1449
-537
+1254
+478
+1447
+511
 par_preys_tte_max
 par_preys_tte_max
 par_preys_tte_min
@@ -2265,10 +2396,10 @@ minutes
 HORIZONTAL
 
 SLIDER
-1241
-546
-1456
-579
+1239
+520
+1454
+553
 par_preys_reactiontime_min
 par_preys_reactiontime_min
 1
@@ -2280,10 +2411,10 @@ secs
 HORIZONTAL
 
 SLIDER
-1241
-581
-1456
-614
+1239
+555
+1454
+588
 par_preys_reactiontime_max
 par_preys_reactiontime_max
 par_preys_reactiontime_min
@@ -2325,10 +2456,10 @@ preys/group
 HORIZONTAL
 
 MONITOR
-1010
-92
-1448
-129
+197
+728
+635
+765
 Planned waypoints
 sort planned-waypoints
 17
@@ -2347,10 +2478,10 @@ display-waypoints
 -1000
 
 SLIDER
-1229
-127
-1447
-160
+1227
+101
+1445
+134
 par_preys_safe-distance
 par_preys_safe-distance
 1
@@ -2384,10 +2515,10 @@ convert-seconds-to-remainder-seconds ticks
 11
 
 SLIDER
-1018
-616
-1236
-649
+1016
+590
+1234
+623
 par_hunters_cooldowntime_min
 par_hunters_cooldowntime_min
 0
@@ -2399,10 +2530,10 @@ secs
 HORIZONTAL
 
 SLIDER
-1019
-652
-1238
-685
+1017
+626
+1236
+659
 par_hunters_cooldowntime_max
 par_hunters_cooldowntime_max
 par_hunters_cooldowntime_min
@@ -2414,10 +2545,10 @@ secs
 HORIZONTAL
 
 SLIDER
-1238
-616
-1456
-649
+1236
+590
+1454
+623
 par_preys_cooldowntime_min
 par_preys_cooldowntime_min
 0
@@ -2429,10 +2560,10 @@ secs
 HORIZONTAL
 
 SLIDER
-1238
-651
-1457
-684
+1236
+625
+1455
+658
 par_preys_cooldowntime_max
 par_preys_cooldowntime_max
 par_preys_cooldowntime_min
@@ -2481,10 +2612,10 @@ PENS
 "default" 1.0 0 -16777216 true "" "plot sum [length tracks] of patches"
 
 SLIDER
-1024
-125
-1215
-158
+1022
+99
+1213
+132
 par_max-shooting-distance
 par_max-shooting-distance
 10
@@ -2507,10 +2638,10 @@ precision (world-width * patch-width * 1E-3) 4
 11
 
 SLIDER
-1009
-226
-1252
-259
+1007
+200
+1250
+233
 par_hunters_height_stealth
 par_hunters_height_stealth
 0
@@ -2522,10 +2653,10 @@ par_hunters_height_stealth
 HORIZONTAL
 
 SLIDER
-1027
-428
-1281
-461
+1025
+402
+1279
+435
 par_hunters_speed_stealth
 par_hunters_speed_stealth
 0
@@ -2537,25 +2668,25 @@ par_hunters_speed_stealth
 HORIZONTAL
 
 SLIDER
-974
-690
+972
+664
+1237
+697
+par_hunters_randomwalk_anglerange
+par_hunters_randomwalk_anglerange
+0
+360
+30.0
+1
+1
+degrees
+HORIZONTAL
+
+SLIDER
 1239
-723
-par_hunters_randomwalk_anglerange
-par_hunters_randomwalk_anglerange
-0
-360
-30.0
-1
-1
-degrees
-HORIZONTAL
-
-SLIDER
-1241
-689
-1496
-722
+663
+1494
+696
 par_preys_randomwalk_anglerange
 par_preys_randomwalk_anglerange
 0
@@ -2567,10 +2698,10 @@ degrees
 HORIZONTAL
 
 SLIDER
-1010
-261
-1252
-294
+1008
+235
+1250
+268
 par_hunters_visualacuity_mean
 par_hunters_visualacuity_mean
 0
@@ -2582,10 +2713,10 @@ par_hunters_visualacuity_mean
 HORIZONTAL
 
 SLIDER
-1253
-260
-1489
-293
+1251
+234
+1487
+267
 par_preys_visualacuity_mean
 par_preys_visualacuity_mean
 0
@@ -2597,10 +2728,10 @@ par_preys_visualacuity_mean
 HORIZONTAL
 
 SLIDER
-1015
-293
-1240
-326
+1013
+267
+1238
+300
 par_hunters_visualacuity_sd
 par_hunters_visualacuity_sd
 0
@@ -2612,10 +2743,10 @@ par_hunters_visualacuity_sd
 HORIZONTAL
 
 SLIDER
-1253
-292
-1473
-325
+1251
+266
+1471
+299
 par_preys_visualacuity_sd
 par_preys_visualacuity_sd
 0
@@ -2652,10 +2783,10 @@ Contextual
 1
 
 SLIDER
-1256
-392
-1448
-425
+1254
+366
+1446
+399
 par_preys_speed_avmax
 par_preys_speed_avmax
 par_preys_speed_min
@@ -2667,10 +2798,10 @@ km/h
 HORIZONTAL
 
 SLIDER
-1027
-386
-1221
-419
+1025
+360
+1219
+393
 par_hunters_speed_avmax
 par_hunters_speed_avmax
 par_hunters_speed_min
@@ -2756,6 +2887,17 @@ true
 PENS
 "default" 1.0 1 -4079321 true "" "histogram [cooldown-time] of preys"
 "pen-1" 1.0 1 -5298144 true "" "histogram [cooldown-time] of hunters"
+
+MONITOR
+197
+764
+636
+801
+Visited waypoints
+visited-planned-waypoints
+17
+1
+9
 
 @#$#@#$#@
 ## WHAT IS IT?
