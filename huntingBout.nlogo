@@ -6,6 +6,7 @@ globals
   track-maximum
   good-daylight-duration
   starting-point
+  wind-spread-angle
 
   ;;; parameters
   ;;;; contextual
@@ -13,6 +14,9 @@ globals
   obstacle-damage
   track-mark-probability
   track-pregeneration-period
+  ;;; NOTE: candidates for variable
+  wind-speed
+  wind-direction
 
   ;;;; hunters (population)
   num-hunters
@@ -37,7 +41,8 @@ globals
 
   max-shooting-distance
 
-  hunters_randomwalk_anglerange
+  hunters_hearing_radius
+  hunters_fov
 
   ;;;; preys (population)
   num-preys
@@ -58,21 +63,37 @@ globals
   preys_cooldowntime_min
   preys_cooldowntime_max
 
-  preys_randomwalk_anglerange
+  preys_hearing_radius
+  preys_fov
 
   ;;;; environment
   init-obstacle-scale
+  init-obstacle-frequency
+  init-obstacle-diffuse-times
+  init-obstacle-diffuse-rate
+
   prey-attractor-probability
+  attractiveness-diffuse-times
+  attractiveness-diffuse-rate
+
+  fires-number
+  fires-radius
 
   ;;; variables
   attractiveness-to-prey-max
 
   planned-waypoints
-  visited-planned-waypoints
+  visited-waypoints
+  discarded-waypoints
 
-  hunter-prey-sightings
-  prey-hunter-sightings
+  hunter-prey-detections
+  prey-hunter-detections
 
+  sneaks
+  pursues
+  shots
+
+  was-bout-successful
   is-bout-finished
   hunter-who-shot
   prey-who-got-shot
@@ -94,13 +115,13 @@ hunters-own
   reaction-time
   cooldown-time
 
-  any-sighting
+  any-detection
   any-unseen-target
   stealth
+  success
 
-  ;;; internal/private
-  hunters-in-sight
-  preys-in-sight
+  hunters-detected
+  preys-detected
 
   unseen-target-location
 
@@ -108,18 +129,22 @@ hunters-own
   approaching-target
   pursuing-target
 
+  ;;; internal/private
   approach-path
 
   reaction-counter
   relax-counter
 
-  running-counter
+  exhaustion-counter
   cooldown-counter
   moved-this-turn
 
   ;;; measurements
   distance-moved
+
   hunting-mode-series
+  position-series-x
+  position-series-y
 ]
 
 preys-own
@@ -134,19 +159,19 @@ preys-own
   group_id
   group-leader
 
-  any-sighting
+  any-detection
   any-unseen-target
 
   ;;; internal/private
-  hunters-in-sight
-  preys-in-sight
+  hunters-detected
+  preys-detected
 
   unseen-target-location
 
   reaction-counter
   relax-counter
 
-  running-counter
+  exhaustion-counter
   cooldown-counter
   moved-this-turn
 ]
@@ -221,6 +246,8 @@ to set-constants
 
   set starting-point patch (min-pxcor + floor (world-width / 2)) (min-pycor + floor (world-height / 2))
 
+  set wind-spread-angle 30 ; degrees, each side of main direction
+
 end
 
 to set-parameters
@@ -229,16 +256,16 @@ to set-parameters
 
   ;;; parameters
 
-  ;;;; environment
-  set init-obstacle-scale par_init-obstacle-scale
-
-  set prey-attractor-probability par_prey-attractor-probability
+  set-scenario-environment-parameters
 
   set obstacle-damage par_obstacle-damage ;;; damage (m obstacle) / 1 (m height) * 1 (sec)
 
   set track-mark-probability par_track-mark-probability ;;; prob. / 1 (m height) * 1 (sec)
 
   set track-pregeneration-period par_track-pregeneration-period
+
+  set wind-speed convert-kmperh-to-patchpersec par_wind-speed ; patch width (m) per second
+  set wind-direction par_wind-direction ; degrees, from default NetLogo's (North = 0)
 
   ;;;; hunters
   set num-hunters par_num-hunters
@@ -260,7 +287,8 @@ to set-parameters
 
   set max-shooting-distance par_max-shooting-distance / patch-width ;;; metres
 
-  set hunters_randomwalk_anglerange par_hunters_randomwalk_anglerange ;;; degrees
+  set hunters_hearing_radius par_hunters_hearing_radius / patch-width
+  set hunters_fov par_hunters_fov ;;; degrees
 
   set num-planned-waypoints par_num-planned-waypoints
 
@@ -282,36 +310,119 @@ to set-parameters
   set preys_cooldowntime_min par_preys_cooldowntime_min
   set preys_cooldowntime_max par_preys_cooldowntime_max
 
-  set preys_randomwalk_anglerange par_preys_randomwalk_anglerange ;;; degrees
+  set preys_hearing_radius par_preys_hearing_radius / patch-width
+  set preys_fov par_preys_fov ;;; degrees
 
   set starting-point-buffer-distance par_starting-point-buffer-distance ; km
 
-  ;;; hunters group movement planning
-  set planned-waypoints get-planned-waypoints num-planned-waypoints
-  set visited-planned-waypoints []
-
 end
 
-to-report get-planned-waypoints [ numPoints ]
+to set-scenario-environment-parameters
 
-  let valid-candidates patches
+  if (scenario-environment = "user-defined")
+  [
+    set init-obstacle-scale par_init-obstacle-scale
+    set init-obstacle-frequency par_init-obstacle-frequency
+    set init-obstacle-diffuse-times par_init-obstacle-diffuse-times
+    set init-obstacle-diffuse-rate par_init-obstacle-diffuse-rate
 
-  ;;; TO-DO - better definition/representation of previous planning
-  ;;; (e.g., interesting points, attractors?, must be "economic", knowledge of area, movement patterns, wind direction of the day)
+    set prey-attractor-probability par_prey-attractor-probability
+    set attractiveness-diffuse-times par_attractiveness-diffuse-times
+    set attractiveness-diffuse-rate par_attractiveness-diffuse-rate
 
-  let selected-waypoints n-of numPoints valid-candidates
+    set fires-number par_fires-number
+    set fires-radius par_fires-radius
+  ]
+  if (scenario-environment = "default")
+  [
+    set init-obstacle-scale 5
+    set init-obstacle-frequency 5
+    set init-obstacle-diffuse-times 10
+    set init-obstacle-diffuse-rate 0.3
 
-  report selected-waypoints
+    set prey-attractor-probability 1
+    set attractiveness-diffuse-times 10
+    set attractiveness-diffuse-rate 0.3
+
+    ;;; no fires
+    set fires-number 0
+    set fires-radius 0
+  ]
+  if (scenario-environment = "wet and no fires")
+  [
+    set init-obstacle-scale 10
+    set init-obstacle-frequency 10
+    set init-obstacle-diffuse-times 5
+    set init-obstacle-diffuse-rate 0.3
+
+    set prey-attractor-probability 20
+    set attractiveness-diffuse-times 10
+    set attractiveness-diffuse-rate 0.3
+
+    ;;; no fires
+    set fires-number 0
+    set fires-radius 0
+  ]
+  if (scenario-environment = "dry and no fires")
+  [
+    set init-obstacle-scale 2
+    set init-obstacle-frequency 5
+    set init-obstacle-diffuse-times 5
+    set init-obstacle-diffuse-rate 0.3
+
+    set prey-attractor-probability 0.1
+    set attractiveness-diffuse-times 10
+    set attractiveness-diffuse-rate 0.3
+
+    ;;; no fires
+    set fires-number 0
+    set fires-radius 0
+  ]
+  if (scenario-environment = "wet with fires")
+  [
+    set init-obstacle-scale 10
+    set init-obstacle-frequency 10
+    set init-obstacle-diffuse-times 5
+    set init-obstacle-diffuse-rate 0.3
+
+    set prey-attractor-probability 20
+    set attractiveness-diffuse-times 10
+    set attractiveness-diffuse-rate 0.3
+
+    ;;; with fires
+    set fires-number 20
+    set fires-radius 100
+  ]
+  if (scenario-environment = "dry with fires")
+  [
+    set init-obstacle-scale 2
+    set init-obstacle-frequency 5
+    set init-obstacle-diffuse-times 5
+    set init-obstacle-diffuse-rate 0.3
+
+    set prey-attractor-probability 0.1
+    set attractiveness-diffuse-times 10
+    set attractiveness-diffuse-rate 0.3
+
+    ;;; with fires
+    set fires-number 20
+    set fires-radius 100
+  ]
 
 end
 
 to initialise-output
 
-  set hunter-prey-sightings 0
-  set prey-hunter-sightings 0
+  set hunter-prey-detections 0
+  set prey-hunter-detections 0
 
-  set hunter-who-shot nobody
-  set prey-who-got-shot nobody
+  set sneaks 0
+  set pursues 0
+  set shots 0
+
+  set was-bout-successful false
+  set hunter-who-shot ""
+  set prey-who-got-shot ""
 
   set is-bout-finished false
 
@@ -322,27 +433,42 @@ to setup-environment
   ask patches
   [
     set elevation random-float 10
-    set obstacle 0;(random-float 1) * (random-float 1) * init-obstacle-scale
-    set attractiveness-to-prey 0
-    if (random-float 100 < prey-attractor-probability) [ set attractiveness-to-prey 100 ]
 
     set tracks []
   ]
 
   repeat 10 [ diffuse elevation 0.5 ]
 
-
-  ask n-of 2000 patches [ set obstacle init-obstacle-scale ]
-  repeat 10 [ diffuse obstacle 0.3 ]
-
-  repeat 10 [ diffuse attractiveness-to-prey 0.3 ]
-
-  set attractiveness-to-prey-max max [attractiveness-to-prey] of patches
-
 ;  ask patches with [pxcor = floor (world-width / 2) and (pycor < floor ((world-height / 2) - 10) or pycor > floor ((world-height / 2) + 10))]
 ;  [
 ;    set obstacle 5
 ;  ]
+
+  let num-patches-with-init-obstacle ((init-obstacle-frequency / 100) * count patches)
+
+  ask n-of num-patches-with-init-obstacle patches [ set obstacle init-obstacle-scale ]
+
+  repeat init-obstacle-diffuse-times [ diffuse obstacle init-obstacle-diffuse-rate ]
+
+  ask patches [ if (random-float 100 < prey-attractor-probability) [ set attractiveness-to-prey 100 ] ]
+
+  repeat attractiveness-diffuse-times [ diffuse attractiveness-to-prey attractiveness-diffuse-rate ]
+
+  set attractiveness-to-prey-max max [attractiveness-to-prey] of patches
+
+  ask n-of fires-number patches
+  [
+    set obstacle 0
+    set attractiveness-to-prey 100
+
+    ask patches in-radius floor (fires-radius / patch-width)
+    [
+      set obstacle 0
+      set attractiveness-to-prey 100
+    ]
+  ]
+
+  set attractiveness-to-prey-max max [attractiveness-to-prey] of patches
 
 end
 
@@ -481,7 +607,7 @@ to setup-hunting-party
       set cooldown-time hunters_cooldowntime_min + random (hunters_cooldowntime_max - hunters_cooldowntime_min)
 
       set any-unseen-target false
-      set unseen-target-location (patch-set)
+      set unseen-target-location no-patches
 
       set follow-track-target nobody
       set approaching-target nobody
@@ -490,6 +616,7 @@ to setup-hunting-party
       set approach-path []
 
       set stealth false
+      set success false
 
       set moved-this-turn false
 
@@ -497,8 +624,34 @@ to setup-hunting-party
 
       set distance-moved 0
       set hunting-mode-series []
+      set position-series-x []
+      set position-series-y []
     ]
   ]
+
+  ;;; hunters group movement planning
+  set planned-waypoints get-planned-waypoints num-planned-waypoints
+  set visited-waypoints []
+  set discarded-waypoints []
+
+end
+
+to-report get-planned-waypoints [ numPoints ]
+
+  let valid-candidates patches with [count neighbors = 8]
+  ; NOTE: ignore edge patches that might peak because of the use of the diffuse command in setup-environment
+
+  let selected-waypoints n-of numPoints valid-candidates
+
+  ;;; filter candidates with the most prey attractiveness (known points of interest)
+  if (waypoints-to-prey-attractors)
+  [
+    set selected-waypoints max-n-of numPoints valid-candidates [attractiveness-to-prey]
+  ]
+  ;;; TO-DO - better definition/representation of previous planning
+  ;;; (e.g., interesting points, attractors?, must be "economic", knowledge of area, movement patterns, wind direction of the day)
+
+  report selected-waypoints
 
 end
 
@@ -506,9 +659,9 @@ to initialise-perceptions
 
   ask (turtle-set preys hunters)
   [
-    set any-sighting false
-    set hunters-in-sight (turtle-set)
-    set preys-in-sight (turtle-set)
+    set any-detection false
+    set hunters-detected (turtle-set)
+    set preys-detected (turtle-set)
 
     initialise-perception-links
   ]
@@ -537,20 +690,20 @@ to go
 
   ask (turtle-set preys hunters with [cooldown-counter = 0])
   [
-    ifelse (any-sighting)
+    ifelse (any-detection)
     [
       ifelse (breed = preys)
       [
-        prey-sighting-move
+        prey-detection-move
       ]
       [
-        hunter-sighting-move
+        hunter-detection-move
       ]
 
       set moved-this-turn true
     ]
     [
-      ;;; if there are no sighting, reaction counter is reset
+      ;;; if there are no detection, reaction counter is reset
       set reaction-counter 0
     ]
   ]
@@ -596,7 +749,7 @@ to go
 
   ask hunters
   [
-    update-planned-waypoints
+    update-waypoints
   ]
 
   ask (turtle-set preys hunters)
@@ -615,21 +768,23 @@ to go
     set moved-this-turn false
   ]
 
+  ask hunters [ save-position ]
+
   clear-older-tracks
 
   update-display
 
   if (print-messages) [ print "second has passed." ]
 
-  if (is-bout-finished) [ stop ]
+  if (was-bout-successful or is-bout-finished) [ stop ] ;;; interrupt simulation once there is a successful shot or a hunter arrives back to camp
 
   tick
 
 end
 
-to prey-sighting-move
+to prey-detection-move
 
-  if (print-messages) [ print (word "prey " who " sees hunter" ([who] of hunters-in-sight)) ]
+  if (print-messages) [ print (word "prey " who " sees hunter" ([who] of hunters-detected)) ]
 
   ifelse (reaction-counter > 0)
   [
@@ -640,14 +795,14 @@ to prey-sighting-move
   ]
   [
     ;;; FLEE
-    move-away-from hunters-in-sight
+    move-away-from hunters-detected
   ]
 
 end
 
 to prey-message-move
 
-  let fleeing-preys preys-in-sight with [ any-sighting and running-counter > 0 ]
+  let fleeing-preys preys-detected with [ any-detection and exhaustion-counter > 0 ]
 
   if (any? fleeing-preys)
   [
@@ -659,11 +814,11 @@ to prey-message-move
 
 end
 
-to hunter-sighting-move
+to hunter-detection-move
 
-  if (print-messages) [ print (word "hunter " who " sees prey" ([who] of preys-in-sight)) ]
+  if (print-messages) [ print (word "hunter " who " sees prey" ([who] of preys-detected)) ]
 
-  ;;; reset follow-track-target (sighting takes priority)
+  ;;; reset follow-track-target (detection takes priority)
   set follow-track-target nobody
 
   ifelse (reaction-counter > 0)
@@ -675,23 +830,21 @@ to hunter-sighting-move
   ]
   [
     let me self
-    let alerted-preys preys-in-sight with [any-sighting and member? me hunters-in-sight]
+    let alerted-preys preys-detected with [any-detection and member? me hunters-detected]
 
     ifelse (any? alerted-preys)
     [
-      ;;; stand, if stealth
-      set stealth false
-
       ;;; prey becomes aware of this hunter, if not already before
       ask min-one-of alerted-preys [distance myself]
       [
-       set hunters-in-sight (turtle-set myself hunters-in-sight)
+       set hunters-detected (turtle-set myself hunters-detected)
       ]
 
       ifelse (min [distance myself] of alerted-preys < max-shooting-distance)
       [
         ;;; SHOOT
         save-hunting-mode "SHOOT"
+        set shots shots + 1
         hunter-shoot (min-one-of alerted-preys [distance myself])
       ]
       [
@@ -699,13 +852,15 @@ to hunter-sighting-move
 
         ;;; PURSUE
         save-hunting-mode "PURSUE"
+        set pursues pursues + 1
         hunter-pursue (min-one-of alerted-preys [distance myself])
       ]
     ]
     [
       ;;; STEALTH APPROACH
       save-hunting-mode "APPROACH-STEALTH"
-      hunter-approach (min-one-of preys-in-sight [distance myself])
+      set sneaks sneaks + 1
+      hunter-approach (min-one-of preys-detected [distance myself])
     ]
   ]
 
@@ -717,8 +872,12 @@ to hunter-shoot [ aPrey ]
 
   let me self
 
+  ;;; stand, if stealth
+  set stealth false
+
   ;;; reset approaching-target
   set approaching-target nobody
+  set approach-path []
 
   ;;; reset pursuing-target
   set pursuing-target nobody
@@ -726,11 +885,19 @@ to hunter-shoot [ aPrey ]
   ifelse (random-float 100 < (1 - ( (distance aPrey) / max-shooting-distance )) * 100)
   [
     ;;; SUCCESS
+
+    ;;; signal successful hunt and head back to camp
+    set discarded-waypoints planned-waypoints
+    set planned-waypoints (patch-set starting-point)
+    save-hunting-mode "SUCCESSFUL-SHOT"
+    save-hunting-mode "BACK-TO-CAMP"
     if (print-messages) [ print "success!" ]
+    set success true
+    set was-bout-successful true
 
     ;;; keep successful hunt information
-    set prey-who-got-shot aPrey
-    set hunter-who-shot self
+    set prey-who-got-shot (word prey-who-got-shot " " aPrey)
+    set hunter-who-shot (word hunter-who-shot " " self)
 
     ;;; mark the spot
     ask [patch-here] of aPrey
@@ -747,15 +914,11 @@ to hunter-shoot [ aPrey ]
     ;;; the prey agent is alerted and will start to flee
     ask aPrey
     [
+
       ;die
       set any-unseen-target true
       set unseen-target-location (patch-set ([patch-here] of me))
     ]
-
-    ;;; signal successful hunt and head back to camp
-    set planned-waypoints (patch-set starting-point)
-    save-hunting-mode "SUCCESSFUL-SHOT"
-    save-hunting-mode "BACK-TO-CAMP"
   ]
   [
     ;;; FAIL
@@ -768,8 +931,12 @@ to hunter-pursue [ aPrey ]
 
   if (print-messages) [ print (word "hunter " who " pursues prey " ([who] of aPrey)) ]
 
+  ;;; stand, if stealth
+  set stealth false
+
   ;;; reset approaching-target
   set approaching-target nobody
+  set approach-path []
 
   set pursuing-target aPrey
 
@@ -788,13 +955,25 @@ to hunter-approach [ aPrey ]
   ;;; reset pursuing-target
   set pursuing-target nobody
 
+  let me self
   set approaching-target aPrey
 
-  set stealth true
+  ifelse ([distance me] of aPrey < preys_safe-distance)
+  [
+    ;;; target is close by:
+    ;;; assume stealth posture
+    set stealth true
+  ]
+  [
+    ;;; unseen-target is still far:
+    ;;; stand, if stealth
+    set stealth false
+  ]
 
   ;;; find path with most obstacles (hiding)
   ;;; TO-DO: correct direction to account for smell (test wind)
   set approach-path find-a-path patch-here [patch-here] of aPrey
+
   face item 1 approach-path ;;; face towards the next patch in the path
 
   make-a-move hunters_speed_stealth speed-max
@@ -805,25 +984,37 @@ to hunter-memory-move
 
   save-hunting-mode "APPROACH-BLIND"
 
-  ;;; reset approaching-target
+  ;;; reset approaching-target and pursuing-target
   set approaching-target nobody
-
-  ;;; reset pursuing-target
   set pursuing-target nobody
 
   let me self
   let unseenTarget min-one-of unseen-target-location [distance me]
 
-  ;;; continue towards the point of last sighting
-  face unseenTarget
+  ifelse ([distance me] of unseenTarget < preys_safe-distance)
+  [
+    ;;; unseen-target is close by:
+    ;;; assume stealth posture, if not already
+    set stealth true
+  ]
+  [
+    ;;; unseen-target is still far:
+    ;;; stand, if stealth
+    set stealth false
+  ]
+
+  ;;; discard stealthy route
+  ;set approach-path []
+  ;;; continue towards the point of last detection
+  ;face unseenTarget
+
+  ;;; find path with most obstacles (hiding)
+  ;;; TO-DO: correct direction to account for smell (test wind)
+  set approach-path find-a-path patch-here unseenTarget
+
+  face item 1 approach-path ;;; face towards the next patch in the path
 
   make-a-move hunters_speed_min speed-max
-
-  ;;; forget unseen target if already there
-  if (unseenTarget = patch-here)
-  [
-    set unseen-target-location unseen-target-location with [self != unseenTarget]
-  ]
 
 end
 
@@ -832,7 +1023,7 @@ to prey-memory-move
   let me self
   let unseenTarget min-one-of unseen-target-location [distance me]
 
-  ;;; continue moving away from the point of last sighting
+  ;;; continue moving away from the point of last detection
   face unseenTarget
   set heading heading - 180
 
@@ -882,7 +1073,7 @@ to prey-default-move
     [
       ;;; if patch-pull is low enough, move.
       ;;; add random direction biased by default heading
-      rt (- (preys_randomwalk_anglerange / 2) + random preys_randomwalk_anglerange)
+      rt (- (preys_fov / 2) + random preys_fov)
       set moving true
     ]
   ]
@@ -907,6 +1098,7 @@ to hunter-default-move
 
   ;;; reset approaching-target
   set approaching-target nobody
+  set approach-path []
 
   ;;; reset pursuing-target
   set pursuing-target nobody
@@ -931,7 +1123,7 @@ to hunter-default-move
     let me self
     face min-one-of planned-waypoints [distance me]
     ;;; add random direction biased by default heading
-    rt (- (hunters_randomwalk_anglerange / 2) + random hunters_randomwalk_anglerange)
+    rt (- (hunters_fov / 2) + random hunters_fov)
   ]
 
   ;;; move
@@ -965,40 +1157,54 @@ to hunter-communicate
 
   let me self
   ;;; Option A: send message to any hunters seen me
-  let receivers hunters with [member? me hunters-in-sight]
+  let receivers hunters with [member? me hunters-detected]
   ;;; Option B: send message only to hunters seen me that are also seen by me
-  ;let receivers hunters-in-sight with [member? me hunters-in-sight]
+  ;let receivers hunters-detected with [member? me hunters-detected]
 
   ask receivers
   [
-    ;;; communicate stealth
-    if ([stealth] of me)
+    ;;; communicate success
+    ifelse ([success] of me)
     [
-      set stealth true
+      set planned-waypoints (patch-set starting-point)
+      save-hunting-mode "BACK-TO-CAMP"
+      set success true
+      set stealth false
     ]
-
-    ;;; add unseen location to any other already in memory
-    set unseen-target-location (patch-set ([unseen-target-location] of me) unseen-target-location)
-
-    ;;; get track target if not already following one
-    if (follow-track-target = nobody and [follow-track-target] of me != nobody)
     [
-      save-hunting-mode "TRACK"
-      set follow-track-target [follow-track-target] of me
-    ]
+      ;;; communicate stealth
+      if ([stealth] of me)
+      [
+        set stealth true
+      ]
 
-    ;;; get approaching target if not already following one
-    if (approaching-target = nobody and [approaching-target] of me != nobody)
-    [
-      save-hunting-mode "APPROACH-STEALTH"
-      set approaching-target [approaching-target] of me
-    ]
+      ;;; add unseen location to any other already in memory
+      set unseen-target-location (patch-set ([unseen-target-location] of me) unseen-target-location)
+      ;;; but if the current patch of either hunter is in this set, discard it
+      let patchISee patch-here
+      let patchSenderSee [patch-here] of me
+      set unseen-target-location unseen-target-location with [self != patchISee and self != patchSenderSee]
 
-    ;;; get pursuing target if not already following one
-    if (pursuing-target = nobody and [pursuing-target] of me != nobody)
-    [
-      save-hunting-mode "PURSUE"
-      set pursuing-target [pursuing-target] of me
+      ;;; get track target if not already following one
+      if (follow-track-target = nobody and [follow-track-target] of me != nobody)
+      [
+        save-hunting-mode "TRACK"
+        set follow-track-target [follow-track-target] of me
+      ]
+
+      ;;; get approaching target if not already pursuing or approaching one
+      if (approaching-target = nobody and pursuing-target = nobody and [approaching-target] of me != nobody)
+      [
+        save-hunting-mode "APPROACH-STEALTH"
+        set approaching-target [approaching-target] of me
+      ]
+
+      ;;; get pursuing target if not already pursuing or approaching one
+      if (approaching-target = nobody and pursuing-target = nobody and [pursuing-target] of me != nobody)
+      [
+        save-hunting-mode "PURSUE"
+        set pursuing-target [pursuing-target] of me
+      ]
     ]
   ]
 
@@ -1007,7 +1213,7 @@ end
 to prey-communicate
 
   let me self
-  let receivers preys-in-sight with [member? me preys-in-sight]
+  let receivers preys-detected with [member? me preys-detected]
 
   ask receivers
   [
@@ -1028,11 +1234,11 @@ to check-escape-condition ;;; preys
 
 end
 
-to update-planned-waypoints
+to update-waypoints
 
   if (member? patch-here planned-waypoints)
   [
-    set visited-planned-waypoints lput patch-here visited-planned-waypoints
+    set visited-waypoints lput patch-here visited-waypoints
 
     ifelse (patch-here = starting-point AND count planned-waypoints = 1)
     [
@@ -1061,15 +1267,15 @@ end
 
 to check-cooldown-condition
 
-  ifelse (running-counter = time-to-exhaustion)
+  ifelse (exhaustion-counter >= time-to-exhaustion)
   [
     if (print-messages) [ print (word self " is exhausted!") ]
     ;;; exhasted, starts cooling down
     set cooldown-counter cooldown-time
 
-    set running-counter 0
+    set exhaustion-counter 0
 
-    save-hunting-mode "PAUSE"
+    if (breed = hunters) [ save-hunting-mode "PAUSE" ]
   ]
   [
     if (cooldown-counter > 0)
@@ -1078,7 +1284,6 @@ to check-cooldown-condition
       set cooldown-counter cooldown-counter - 1
     ]
   ]
-
 
 end
 
@@ -1112,36 +1317,40 @@ to update-perception
 
   let me self
 
-  set hunters-in-sight other hunters with [presence-detected-by me]
-  set preys-in-sight other preys with [presence-detected-by me]
+  set hunters-detected other hunters with [presence-detected-by me]
+  set preys-detected other preys with [presence-detected-by me]
 
   ask my-out-links [ set hidden? true ]
 
-  ask hunters-in-sight [ ask in-link-from me [ set hidden? false ] ]
-  ask preys-in-sight [ ask in-link-from me [ set hidden? false ] ]
+  ask hunters-detected [ ask in-link-from me [ set hidden? false ] ]
+  ask preys-detected [ ask in-link-from me [ set hidden? false ] ]
 
 end
 
 to update-alertness
 
-  let oldSighting any-sighting
+  ;;; forget unseen target if already there
+  let patchHere patch-here
+  set unseen-target-location unseen-target-location with [self != patchHere]
+
+  let oldDetection any-detection
 
   ifelse (breed = preys)
   [
-    set any-sighting (any? hunters-in-sight)
+    set any-detection (any? hunters-detected)
 
-    ;;; new prey-hunter-sightings
-    if (any-sighting and not oldSighting)
+    ;;; new prey-hunter-detections
+    if (any-detection and not oldDetection)
     [
       set reaction-counter reaction-time - relax-counter
       set relax-counter reaction-time
 
-      ;;; mark patches of sightings as unseen target locations, used once the hunters are no more in sight
-      ;;; NOTE: all former unseen target locations are clearer from memory
-      set unseen-target-location (patch-set ([patch-here] of hunters-in-sight))
+      ;;; mark patches of detections as unseen target locations, used once the hunters are no more in sight
+      ;;; NOTE: all former unseen target locations are cleared from memory
+      set unseen-target-location (patch-set ([patch-here] of hunters-detected))
 
       ;;; add to global count
-      set prey-hunter-sightings prey-hunter-sightings + count hunters-in-sight
+      set prey-hunter-detections prey-hunter-detections + count hunters-detected
     ]
 
     set any-unseen-target false
@@ -1152,20 +1361,20 @@ to update-alertness
     ]
   ]
   [
-    set any-sighting (any? preys-in-sight)
+    set any-detection (any? preys-detected)
 
-    ;;; account for new hunter-prey-sightings
-    if (any-sighting and not oldSighting)
+    ;;; account for new hunter-prey-detections
+    if (any-detection and not olddetection)
     [
       set reaction-counter reaction-time - relax-counter
       set relax-counter reaction-time
 
-      ;;; mark patches of sightings as unseen target locations, used once prey are no more in sight
+      ;;; mark patches of detections as unseen target locations, used once prey are no more in sight
       ;;; NOTE: all former unseen target locations are clearer from memory
-      set unseen-target-location (patch-set ([patch-here] of preys-in-sight))
+      set unseen-target-location (patch-set ([patch-here] of preys-detected))
 
       ;;; add to global count
-      set hunter-prey-sightings hunter-prey-sightings + count preys-in-sight
+      set hunter-prey-detections hunter-prey-detections + count preys-detected
     ]
 
     set any-unseen-target false
@@ -1196,23 +1405,88 @@ end
 
 to-report presence-detected-by [ theOther ]
 
-  ;;; skip calculations if agents are in the same patch
-  ;if (patch-here = [patch-here] of theOther) [ report true ]
-  ;if ((xcor = [xcor] of theOther) and (ycor = [ycor] of theOther)) [ report true ]
+  let response false
 
   let me self
-  let response false
+  let meIsStealthy false
+  if (breed = hunters) [ set meIsStealthy stealth ]
 
   ask theOther
   [
+    ;;; SOUND
+    if (not meIsStealthy)
+    [
+      if (hearing me) [ set response true ]
+    ]
+
+    ;;; SMELL
+    if ((not response) and (wind-speed > 0) and (breed = preys)) ;;; NOTE: skip for hunters, assuming poor human smelling
+    [
+      if (smelling me) [ set response true ]
+    ]
+
+    ;;; SIGHT
+    if (not response)
+    [
+      if (seeing me) [ set response true ]
+    ]
+  ]
+
+  report response
+
+end
+
+to-report hearing [ anotherTurtle ]
+
+  let response false
+
+  let hearingRadius hunters_hearing_radius
+  if (breed = preys) [ set hearingRadius preys_hearing_radius ]
+
+  if (distance anotherTurtle < hearingRadius) [ report true ]
+
+  report response
+
+end
+
+to-report smelling [ anotherTurtle ]
+
+  let response false
+
+  let headingFromAnotherTurtle atan (xcor - [xcor] of anotherTurtle) (ycor - [ycor] of anotherTurtle)
+
+  let withinSpreadAngle (headingFromAnotherTurtle > wind-direction - wind-spread-angle) and (headingFromAnotherTurtle < wind-direction + wind-spread-angle)
+
+  if (withinSpreadAngle and distance anotherTurtle < wind-speed) [ report true ]
+
+  report response
+
+end
+
+to-report seeing [ anotherTurtle ]
+
+  let response false
+
+  let headingToAnotherTurtle atan ([xcor] of anotherTurtle - xcor) ([ycor] of anotherTurtle - ycor)
+
+  ;;; calculate vision field
+  let theOtherVisionfield hunters_fov
+  if (breed = preys) [ set theOtherVisionfield preys_fov ]
+  let visionfieldLimitLeft heading - (theOtherVisionfield / 2)
+  let visionfieldLimitRight heading + (theOtherVisionfield / 2)
+
+  ;;; test if within the vision field of theOther
+  if (headingToAnotherTurtle > visionfieldLimitLeft and headingToAnotherTurtle < visionfieldLimitRight)
+  [
+    ;;; test line-of-sight
     let currentHeading heading
     ;;; NOTE: line-of-sight modifies theOther's heading, so we keep its current value and recover it later
 
-    let lineOfSightFromTheOtherToMe line-of-sight-with me
-    set response member? ([patch-here] of me) lineOfSightFromTheOtherToMe
+    let lineOfSightToAnotherTurtle line-of-sight-with anotherTurtle
+    set response member? ([patch-here] of anotherTurtle) lineOfSightToAnotherTurtle
 
     ;;; test sighting skill of theOther
-    if (distance me > max-perception-distance * visual-acuity / 100)
+    if (distance anotherTurtle > max-perception-distance * visual-acuity / 100)
     [ set response false ]
 
     set heading currentHeading
@@ -1420,7 +1694,7 @@ end
 
 to apply-exertion [ aSpeed maxSpeed ]
 
-  set running-counter running-counter + (aSpeed / maxSpeed)
+  set exhaustion-counter exhaustion-counter + (aSpeed / maxSpeed)
 
 end
 
@@ -1526,6 +1800,77 @@ to save-hunting-mode [ huntingModeName ]
   [
     set hunting-mode-series lput (list huntingModeName ticks) hunting-mode-series
   ]
+
+end
+
+to save-position
+
+  set position-series-x lput xcor position-series-x
+
+  set position-series-y lput ycor position-series-y
+
+end
+
+to export-data [ paramConfig ]
+
+  let FilePath "output//"
+  let filename (word FilePath behaviorspace-experiment-name "_" paramConfig "_huntingbout" SEED "_hunters" ".csv")
+
+  file-open filename
+
+  file-print "hunter,tick,x,y,mode"
+
+  foreach sort hunters
+  [
+    aHunter ->
+    ask aHunter
+    [
+      foreach n-values ticks [ i -> i ]
+      [
+        aTick ->
+        file-type who file-type ", "
+        file-type aTick file-type ", "
+        file-type item aTick position-series-x file-type ", "
+        file-type item aTick position-series-x file-type ", "
+        file-print (word "'" (get-hunting-mode-in-tick aTick) "'")
+      ]
+    ]
+  ]
+
+  file-close
+
+  set display-mode "elevation+obstacle"
+  paint-patches
+  export-view (word FilePath behaviorspace-experiment-name "_" paramConfig "_huntingbout" SEED "_hunters_elevation+obstacle" ".png")
+
+  set display-mode "attractiveness-to-prey"
+  paint-patches
+  export-view (word FilePath behaviorspace-experiment-name "_" paramConfig "_huntingbout" SEED "_hunters_attractiveness-to-prey" ".png")
+
+  set display-mode "tracks (prey)"
+  paint-patches
+  export-view (word FilePath behaviorspace-experiment-name "_" paramConfig "_huntingbout" SEED "_hunters_tracks (prey)" ".png")
+
+  set display-mode "tracks (hunters)"
+  paint-patches
+  export-view (word FilePath behaviorspace-experiment-name "_" paramConfig "_huntingbout" SEED "_hunters_tracks (hunters)" ".png")
+
+end
+
+to-report get-hunting-mode-in-tick [ aTick ]
+
+  let huntingMode 0
+
+  foreach hunting-mode-series [
+    entry ->
+      let entryHuntingMode first entry
+      let entryTick last entry
+      if aTick >= entryTick [
+        set huntingMode entryHuntingMode
+      ]
+  ]
+
+  report huntingMode
 
 end
 
@@ -1797,6 +2142,12 @@ to-report sample-skewed-speed [ minSpeed maxSpeed averageMaxSpeed ]
   report x-value
 end
 
+to-report convert-patch-to-km [ numOfPatches ]
+
+  report numOfPatches * patch-width * 1E-3
+
+end
+
 to-report convert-kmperh-to-patchpersec [ kmperh ]
   ; km/h -> m/sec -> patch/sec
   let mpersec kmperh * (1000 / 3600)
@@ -1831,6 +2182,61 @@ end
 to-report clamp0100 [ value ]
 
   report min (list (max (list value 0)) 100)
+
+end
+
+to paint-visionfield [ aTurtle ]
+
+  ask patches
+  [
+    set pcolor black
+
+    let response false
+    let response2 false
+    let me self
+
+    ask aTurtle
+    [
+      if (patch-here != me)
+      [
+        let currentHeading heading
+
+        let headingToMe atan ([pxcor] of me - xcor) ([pycor] of me - ycor)
+
+        if (round currentHeading = round headingToMe) [ set response2 true ]
+        ;;; calculate vision field
+        let theOtherVisionfield hunters_fov
+        if (breed = preys) [ set theOtherVisionfield preys_fov ]
+        let visionfieldLimitLeft currentHeading - (theOtherVisionfield / 2)
+        let visionfieldLimitRight currentHeading + (theOtherVisionfield / 2)
+
+        ;;; test if within the vision field of theOther
+        if (headingToMe > visionfieldLimitLeft and headingToMe < visionfieldLimitRight)
+        [
+          set response true
+        ]
+      ]
+    ]
+
+    if (response) [ set pcolor yellow ]
+    if (response2) [ set pcolor red ]
+  ]
+
+end
+
+to paint-approach-path [ aHunter ]
+
+  ask aHunter
+  [
+    foreach approach-path
+    [
+      aPatch ->
+      ask aPatch
+      [
+        set pcolor yellow
+      ]
+    ]
+  ]
 
 end
 @#$#@#$#@
@@ -1896,10 +2302,10 @@ NIL
 1
 
 PLOT
-648
-373
-957
-493
+1497
+79
+1806
+199
 height
 height (m)
 NIL
@@ -1915,10 +2321,10 @@ PENS
 "hunters" 1.0 1 -5298144 true "set-plot-pen-interval 0.1\nhistogram [height] of hunters" "set-plot-pen-interval 0.1\nhistogram [height] of hunters"
 
 PLOT
-648
-729
-958
-849
+1497
+435
+1807
+555
 time to exhaustion (TTE)
 TTE (seconds)
 NIL
@@ -1939,7 +2345,7 @@ INPUTBOX
 99
 158
 SEED
-123.0
+3.0
 1
 0
 Number
@@ -1952,7 +2358,7 @@ CHOOSER
 display-mode
 display-mode
 "elevation" "obstacle" "elevation+obstacle" "attractiveness-to-prey" "tracks (prey)" "tracks (hunters)"
-1
+5
 
 BUTTON
 42
@@ -1972,10 +2378,10 @@ NIL
 1
 
 PLOT
-631
-102
-1000
-222
+845
+101
+1005
+221
 obstacles
 patch obstacle height (m)
 NIL
@@ -2034,31 +2440,31 @@ MONITOR
 136
 56
 minutes
-convert-seconds-to-minutes ticks
+(convert-seconds-to-minutes ticks) mod 60
 17
 1
 11
 
 SLIDER
 630
-33
-942
-66
+240
+824
+273
 par_prey-attractor-probability
 par_prey-attractor-probability
 0
 100
-1.0
+49.0
 1
 1
 %
 HORIZONTAL
 
 SLIDER
-630
-66
-942
-99
+624
+128
+824
+161
 par_init-obstacle-scale
 par_init-obstacle-scale
 0
@@ -2070,10 +2476,10 @@ m height
 HORIZONTAL
 
 SLIDER
-627
-277
-841
-310
+632
+454
+876
+487
 par_starting-point-buffer-distance
 par_starting-point-buffer-distance
 0
@@ -2085,10 +2491,10 @@ Km
 HORIZONTAL
 
 SLIDER
-628
-307
-997
-340
+635
+572
+1004
+605
 par_obstacle-damage
 par_obstacle-damage
 0
@@ -2100,10 +2506,10 @@ m height (obstacle) / 1 m height (body) * 1 sec
 HORIZONTAL
 
 SLIDER
-628
-341
-998
-374
+635
+606
+1005
+639
 par_track-mark-probability
 par_track-mark-probability
 0
@@ -2115,10 +2521,10 @@ par_track-mark-probability
 HORIZONTAL
 
 SLIDER
-627
-245
-831
-278
+632
+422
+879
+455
 par_track-pregeneration-period
 par_track-pregeneration-period
 0
@@ -2151,45 +2557,45 @@ patch-width
 11
 
 SLIDER
-1010
-30
-1202
-63
+1026
+80
+1218
+113
 par_num-hunters
 par_num-hunters
 0
 10
-3.0
+5.0
 1
 1
 hunters
 HORIZONTAL
 
 TEXTBOX
-1013
-11
-1163
-29
+1029
+61
+1179
+79
 Hunters
 14
 0.0
 1
 
 TEXTBOX
-1253
-10
-1403
-28
+1269
+60
+1419
+78
 Preys
 14
 0.0
 1
 
 SLIDER
-1022
-132
-1213
-165
+1038
+182
+1229
+215
 par_hunters_height_min
 par_hunters_height_min
 1
@@ -2201,25 +2607,25 @@ m
 HORIZONTAL
 
 SLIDER
-1021
-166
-1212
-199
+1037
+216
+1228
+249
 par_hunters_height_max
 par_hunters_height_max
 par_hunters_height_min
 2
-2.0
+500.0
 0.01
 1
 m
 HORIZONTAL
 
 SLIDER
-1026
-300
-1217
-333
+1030
+419
+1221
+452
 par_hunters_speed_min
 par_hunters_speed_min
 1
@@ -2231,25 +2637,25 @@ km/h
 HORIZONTAL
 
 SLIDER
-1025
-330
-1218
-363
+1029
+449
+1222
+482
 par_hunters_speed_max
 par_hunters_speed_max
 par_hunters_speed_min
 30
-30.0
+50.0
 0.1
 1
 km/h
 HORIZONTAL
 
 SLIDER
-1030
-445
-1220
-478
+1034
+564
+1224
+597
 par_hunters_tte_min
 par_hunters_tte_min
 1
@@ -2261,100 +2667,100 @@ minutes
 HORIZONTAL
 
 SLIDER
-1030
-479
-1221
-512
+1034
+598
+1225
+631
 par_hunters_tte_max
 par_hunters_tte_max
 par_hunters_tte_min
 360
-30.0
+600.0
 1
 1
 minutes
 HORIZONTAL
 
 SLIDER
-1019
-520
-1233
-553
+1023
+639
+1237
+672
 par_hunters_reactiontime_min
 par_hunters_reactiontime_min
 1
 par_hunters_reactiontime_max
-5.0
+1.0
 1
 1
 seconds
 HORIZONTAL
 
 SLIDER
-1019
-553
-1233
-586
+1023
+672
+1237
+705
 par_hunters_reactiontime_max
 par_hunters_reactiontime_max
 par_hunters_reactiontime_min
 360
-30.0
+500.0
 1
 1
 seconds
 HORIZONTAL
 
 SLIDER
-1250
-133
-1441
-166
+1266
+183
+1457
+216
 par_preys_height_min
 par_preys_height_min
 1
 par_preys_height_max
-1.5
+1.0
 0.01
 1
 m
 HORIZONTAL
 
 SLIDER
-1250
-167
-1441
-200
+1266
+217
+1457
+250
 par_preys_height_max
 par_preys_height_max
 par_preys_height_min
 2
-2.0
+100.0
 0.01
 1
 m
 HORIZONTAL
 
 SLIDER
-1254
-300
-1447
-333
+1258
+419
+1451
+452
 par_preys_speed_min
 par_preys_speed_min
 1
 par_preys_speed_max
-30.0
+5.0
 0.1
 1
 km/h
 HORIZONTAL
 
 SLIDER
-1254
-334
-1447
-367
+1258
+453
+1451
+486
 par_preys_speed_max
 par_preys_speed_max
 par_preys_speed_min
@@ -2366,25 +2772,25 @@ km/h
 HORIZONTAL
 
 SLIDER
-1254
-443
-1447
-476
+1258
+562
+1451
+595
 par_preys_tte_min
 par_preys_tte_min
 1
 par_preys_tte_max
-60.0
+6.0
 1
 1
 minutes
 HORIZONTAL
 
 SLIDER
-1254
-478
-1447
-511
+1258
+597
+1451
+630
 par_preys_tte_max
 par_preys_tte_max
 par_preys_tte_min
@@ -2396,30 +2802,15 @@ minutes
 HORIZONTAL
 
 SLIDER
-1239
-520
-1454
-553
+1243
+639
+1458
+672
 par_preys_reactiontime_min
 par_preys_reactiontime_min
 1
 par_preys_reactiontime_max
-60.0
-1
-1
-secs
-HORIZONTAL
-
-SLIDER
-1239
-555
-1454
-588
-par_preys_reactiontime_max
-par_preys_reactiontime_max
-par_preys_reactiontime_min
-300
-100.0
+1.0
 1
 1
 secs
@@ -2427,24 +2818,39 @@ HORIZONTAL
 
 SLIDER
 1243
-31
-1433
-64
+674
+1458
+707
+par_preys_reactiontime_max
+par_preys_reactiontime_max
+par_preys_reactiontime_min
+300
+100.0
+1
+1
+secs
+HORIZONTAL
+
+SLIDER
+1259
+81
+1449
+114
 par_num-preys
 par_num-preys
 0
 100
-24.0
+25.0
 1
 1
 preys
 HORIZONTAL
 
 SLIDER
-1226
-62
-1459
-95
+1242
+112
+1475
+145
 par_preys_group_max_size
 par_preys_group_max_size
 0
@@ -2478,10 +2884,10 @@ display-waypoints
 -1000
 
 SLIDER
-1227
-101
-1445
-134
+1243
+151
+1461
+184
 par_preys_safe-distance
 par_preys_safe-distance
 1
@@ -2515,25 +2921,25 @@ convert-seconds-to-remainder-seconds ticks
 11
 
 SLIDER
-1016
-590
-1234
-623
+1020
+709
+1238
+742
 par_hunters_cooldowntime_min
 par_hunters_cooldowntime_min
 0
 par_hunters_cooldowntime_max
-400.0
+50.0
 1
 1
 secs
 HORIZONTAL
 
 SLIDER
-1017
-626
-1236
-659
+1021
+745
+1240
+778
 par_hunters_cooldowntime_max
 par_hunters_cooldowntime_max
 par_hunters_cooldowntime_min
@@ -2545,25 +2951,25 @@ secs
 HORIZONTAL
 
 SLIDER
-1236
-590
-1454
-623
+1240
+709
+1458
+742
 par_preys_cooldowntime_min
 par_preys_cooldowntime_min
 0
 par_preys_cooldowntime_max
-200.0
+1.0
 1
 1
 secs
 HORIZONTAL
 
 SLIDER
-1236
-625
-1455
-658
+1240
+744
+1459
+777
 par_preys_cooldowntime_max
 par_preys_cooldowntime_max
 par_preys_cooldowntime_min
@@ -2579,7 +2985,7 @@ PLOT
 425
 624
 575
-Sightings
+Detections
 seconds
 NIL
 0.0
@@ -2590,8 +2996,8 @@ true
 true
 "" ""
 PENS
-"preys->hunters" 1.0 0 -1184463 true "" "plot prey-hunter-sightings"
-"hunters->preys" 1.0 0 -2674135 true "" "plot hunter-prey-sightings"
+"preys->hunters" 1.0 0 -1184463 true "" "plot prey-hunter-detections"
+"hunters->preys" 1.0 0 -2674135 true "" "plot hunter-prey-detections"
 
 PLOT
 210
@@ -2612,10 +3018,10 @@ PENS
 "default" 1.0 0 -16777216 true "" "plot sum [length tracks] of patches"
 
 SLIDER
-1022
-99
-1213
-132
+1038
+149
+1229
+182
 par_max-shooting-distance
 par_max-shooting-distance
 10
@@ -2632,16 +3038,16 @@ MONITOR
 185
 438
 world-width (Km)
-precision (world-width * patch-width * 1E-3) 4
+precision (convert-patch-to-km world-width) 4
 17
 1
 11
 
 SLIDER
-1007
-200
-1250
-233
+1027
+249
+1270
+282
 par_hunters_height_stealth
 par_hunters_height_stealth
 0
@@ -2653,10 +3059,10 @@ par_hunters_height_stealth
 HORIZONTAL
 
 SLIDER
-1025
-402
-1279
-435
+1029
+521
+1283
+554
 par_hunters_speed_stealth
 par_hunters_speed_stealth
 0
@@ -2668,40 +3074,40 @@ par_hunters_speed_stealth
 HORIZONTAL
 
 SLIDER
-972
-664
-1237
-697
-par_hunters_randomwalk_anglerange
-par_hunters_randomwalk_anglerange
+1032
+320
+1240
+353
+par_hunters_fov
+par_hunters_fov
 0
 360
-30.0
+200.0
 1
 1
 degrees
 HORIZONTAL
 
 SLIDER
-1239
-663
-1494
-696
-par_preys_randomwalk_anglerange
-par_preys_randomwalk_anglerange
+1260
+321
+1458
+354
+par_preys_fov
+par_preys_fov
 0
 360
-30.0
+300.0
 1
 1
 degrees
 HORIZONTAL
 
 SLIDER
-1008
-235
-1250
-268
+1012
+354
+1254
+387
 par_hunters_visualacuity_mean
 par_hunters_visualacuity_mean
 0
@@ -2713,10 +3119,10 @@ par_hunters_visualacuity_mean
 HORIZONTAL
 
 SLIDER
-1251
-234
-1487
-267
+1255
+353
+1491
+386
 par_preys_visualacuity_mean
 par_preys_visualacuity_mean
 0
@@ -2728,10 +3134,10 @@ par_preys_visualacuity_mean
 HORIZONTAL
 
 SLIDER
-1013
-267
-1238
-300
+1017
+386
+1242
+419
 par_hunters_visualacuity_sd
 par_hunters_visualacuity_sd
 0
@@ -2743,10 +3149,10 @@ par_hunters_visualacuity_sd
 HORIZONTAL
 
 SLIDER
-1251
-266
-1471
-299
+1255
+385
+1475
+418
 par_preys_visualacuity_sd
 par_preys_visualacuity_sd
 0
@@ -2758,10 +3164,10 @@ par_preys_visualacuity_sd
 HORIZONTAL
 
 SLIDER
-1010
-60
-1226
-93
+1026
+110
+1242
+143
 par_num-planned-waypoints
 par_num-planned-waypoints
 1
@@ -2773,20 +3179,20 @@ waypoints
 HORIZONTAL
 
 TEXTBOX
-632
-229
-782
-247
+637
+406
+787
+424
 Contextual
 14
 0.0
 1
 
 SLIDER
-1254
-366
-1446
-399
+1258
+485
+1450
+518
 par_preys_speed_avmax
 par_preys_speed_avmax
 par_preys_speed_min
@@ -2798,25 +3204,25 @@ km/h
 HORIZONTAL
 
 SLIDER
-1025
-360
-1219
-393
+1029
+479
+1223
+512
 par_hunters_speed_avmax
 par_hunters_speed_avmax
 par_hunters_speed_min
 par_hunters_speed_max
-15.0
+50.0
 1
 1
 km/h
 HORIZONTAL
 
 PLOT
-648
-492
-956
-612
+1497
+198
+1805
+318
 visual acuity
 % of max. dist
 NIL
@@ -2832,10 +3238,10 @@ PENS
 "hunters" 1.0 1 -5298144 true "" "histogram [visual-acuity] of hunters"
 
 PLOT
-648
-611
-955
-731
+1497
+317
+1804
+437
 Maximum speed (potential)
 patch-width/second
 NIL
@@ -2851,10 +3257,10 @@ PENS
 "hunters" 1.0 0 -5298144 true "" "histogram [speed-max] of hunters"
 
 PLOT
-958
-730
-1219
-850
+1498
+556
+1807
+676
 Reaction time
 seconds
 NIL
@@ -2870,10 +3276,10 @@ PENS
 "hunters" 1.0 1 -5298144 true "" "histogram [reaction-time] of preys"
 
 PLOT
-1221
-730
-1454
-850
+1499
+676
+1806
+796
 cooldown time
 seconds
 NIL
@@ -2885,8 +3291,8 @@ true
 true
 "set-plot-x-range 0 ceiling (1.1 * max (list (max [cooldown-time] of hunters) (max [cooldown-time] of preys)))\nset-histogram-num-bars 20" ""
 PENS
-"default" 1.0 1 -4079321 true "" "histogram [cooldown-time] of preys"
-"pen-1" 1.0 1 -5298144 true "" "histogram [cooldown-time] of hunters"
+"preys" 1.0 1 -4079321 true "" "histogram [cooldown-time] of preys"
+"hunters" 1.0 1 -5298144 true "" "histogram [cooldown-time] of hunters"
 
 MONITOR
 197
@@ -2894,10 +3300,273 @@ MONITOR
 636
 801
 Visited waypoints
-visited-planned-waypoints
+sort visited-waypoints
 17
 1
 9
+
+SLIDER
+1041
+287
+1252
+320
+par_hunters_hearing_radius
+par_hunters_hearing_radius
+0
+500
+50.0
+1
+1
+m
+HORIZONTAL
+
+SLIDER
+1252
+286
+1452
+319
+par_preys_hearing_radius
+par_preys_hearing_radius
+0
+500
+300.0
+1
+1
+m
+HORIZONTAL
+
+SLIDER
+654
+527
+808
+560
+par_wind-speed
+par_wind-speed
+0
+40
+20.0
+1
+1
+km/h
+HORIZONTAL
+
+SLIDER
+642
+496
+833
+529
+par_wind-direction
+par_wind-direction
+0
+360
+0.0
+1
+1
+degrees from N
+HORIZONTAL
+
+MONITOR
+6
+445
+63
+490
+NIL
+sneaks
+17
+1
+11
+
+MONITOR
+65
+445
+122
+490
+NIL
+pursues
+17
+1
+11
+
+MONITOR
+125
+446
+182
+491
+NIL
+shots
+17
+1
+11
+
+MONITOR
+56
+497
+182
+542
+NIL
+was-bout-successful
+17
+1
+11
+
+MONITOR
+12
+546
+199
+591
+NIL
+hunter-who-shot
+17
+1
+11
+
+MONITOR
+12
+594
+199
+639
+NIL
+prey-who-got-shot
+17
+1
+11
+
+MONITOR
+196
+802
+635
+839
+Discarded waypoints
+sort discarded-waypoints
+17
+1
+9
+
+SLIDER
+622
+92
+844
+125
+par_init-obstacle-frequency
+par_init-obstacle-frequency
+0
+100
+5.0
+1
+1
+% patches
+HORIZONTAL
+
+CHOOSER
+643
+37
+798
+82
+scenario-environment
+scenario-environment
+"user-defined" "wet and no fires" "dry and no fires" "wet with fires" "dry with fires" "default"
+5
+
+SLIDER
+624
+162
+813
+195
+par_init-obstacle-diffuse-rate
+par_init-obstacle-diffuse-rate
+0
+1
+0.3
+0.01
+1
+NIL
+HORIZONTAL
+
+SLIDER
+624
+195
+813
+228
+par_init-obstacle-diffuse-times
+par_init-obstacle-diffuse-times
+0
+100
+5.0
+1
+1
+x
+HORIZONTAL
+
+SLIDER
+623
+273
+821
+306
+par_attractiveness-diffuse-rate
+par_attractiveness-diffuse-rate
+0
+1
+0.3
+0.01
+1
+NIL
+HORIZONTAL
+
+SLIDER
+622
+307
+822
+340
+par_attractiveness-diffuse-times
+par_attractiveness-diffuse-times
+0
+100
+10.0
+1
+1
+x
+HORIZONTAL
+
+SLIDER
+834
+292
+1006
+325
+par_fires-radius
+par_fires-radius
+0
+100
+3.0
+1
+1
+m
+HORIZONTAL
+
+SLIDER
+834
+258
+1006
+291
+par_fires-number
+par_fires-number
+0
+10
+5.0
+1
+1
+NIL
+HORIZONTAL
+
+SWITCH
+663
+652
+881
+685
+waypoints-to-prey-attractors
+waypoints-to-prey-attractors
+0
+1
+-1000
 
 @#$#@#$#@
 ## WHAT IS IT?
@@ -3245,6 +3914,2062 @@ NetLogo 6.4.0
 @#$#@#$#@
 @#$#@#$#@
 @#$#@#$#@
+<experiments>
+  <experiment name="experiment-numbers" repetitions="1" runMetricsEveryStep="false">
+    <setup>setup</setup>
+    <go>go</go>
+    <postRun>let paramConfig (word "par_num-preys=" par_num-preys "_par_num-hunters=" par_num-hunters)
+export-data paramConfig</postRun>
+    <metric>patch-width</metric>
+    <metric>max-perception-distance</metric>
+    <metric>track-maximum</metric>
+    <metric>good-daylight-duration</metric>
+    <metric>starting-point</metric>
+    <metric>wind-spread-angle</metric>
+    <metric>starting-point-buffer-distance</metric>
+    <metric>obstacle-damage</metric>
+    <metric>track-mark-probability</metric>
+    <metric>track-pregeneration-period</metric>
+    <metric>wind-speed</metric>
+    <metric>wind-direction</metric>
+    <metric>num-hunters</metric>
+    <metric>num-planned-waypoints</metric>
+    <metric>hunters_height_stealth</metric>
+    <metric>hunters_height_min</metric>
+    <metric>hunters_height_max</metric>
+    <metric>hunters_visualacuity_mean</metric>
+    <metric>hunters_visualacuity_sd</metric>
+    <metric>hunters_speed_stealth</metric>
+    <metric>hunters_speed_min</metric>
+    <metric>hunters_speed_max</metric>
+    <metric>hunters_speed_avmax</metric>
+    <metric>hunters_tte_min</metric>
+    <metric>hunters_tte_max</metric>
+    <metric>hunters_reactiontime_min</metric>
+    <metric>hunters_reactiontime_max</metric>
+    <metric>hunters_cooldowntime_min</metric>
+    <metric>hunters_cooldowntime_max</metric>
+    <metric>max-shooting-distance</metric>
+    <metric>hunters_hearing_radius</metric>
+    <metric>hunters_fov</metric>
+    <metric>num-preys</metric>
+    <metric>preys_group_max_size</metric>
+    <metric>preys_safe-distance</metric>
+    <metric>preys_height_min</metric>
+    <metric>preys_height_max</metric>
+    <metric>preys_visualacuity_mean</metric>
+    <metric>preys_visualacuity_sd</metric>
+    <metric>preys_speed_min</metric>
+    <metric>preys_speed_max</metric>
+    <metric>preys_speed_avmax</metric>
+    <metric>preys_tte_min</metric>
+    <metric>preys_tte_max</metric>
+    <metric>preys_reactiontime_min</metric>
+    <metric>preys_reactiontime_max</metric>
+    <metric>preys_cooldowntime_min</metric>
+    <metric>preys_cooldowntime_max</metric>
+    <metric>preys_hearing_radius</metric>
+    <metric>preys_fov</metric>
+    <metric>init-obstacle-scale</metric>
+    <metric>prey-attractor-probability</metric>
+    <metric>attractiveness-to-prey-max</metric>
+    <metric>planned-waypoints</metric>
+    <metric>visited-waypoints</metric>
+    <metric>discarded-waypoints</metric>
+    <metric>hunter-prey-detections</metric>
+    <metric>prey-hunter-detections</metric>
+    <metric>sneaks</metric>
+    <metric>pursues</metric>
+    <metric>shots</metric>
+    <metric>was-bout-successful</metric>
+    <metric>is-bout-finished</metric>
+    <metric>hunter-who-shot</metric>
+    <metric>prey-who-got-shot</metric>
+    <enumeratedValueSet variable="display-waypoints">
+      <value value="true"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_reactiontime_max">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_obstacle-damage">
+      <value value="0.01"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_tte_min">
+      <value value="60"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_fov">
+      <value value="300"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="agent-scale">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_reactiontime_max">
+      <value value="100"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_height_min">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_track-pregeneration-period">
+      <value value="7"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_visualacuity_sd">
+      <value value="15"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_safe-distance">
+      <value value="500"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_height_min">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_init-obstacle-scale">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_starting-point-buffer-distance">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_avmax">
+      <value value="15"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_cooldowntime_min">
+      <value value="200"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_track-mark-probability">
+      <value value="0.1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_height_max">
+      <value value="2"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_stealth">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_max">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_min">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_tte_max">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-preys">
+      <value value="5"/>
+      <value value="10"/>
+      <value value="20"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-hunters">
+      <value value="1"/>
+      <value value="2"/>
+      <value value="3"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_fov">
+      <value value="200"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_max">
+      <value value="75"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_prey-attractor-probability">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-planned-waypoints">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_reactiontime_min">
+      <value value="60"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_cooldowntime_min">
+      <value value="400"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_wind-direction">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_tte_max">
+      <value value="100"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_visualacuity_mean">
+      <value value="33"/>
+    </enumeratedValueSet>
+    <steppedValueSet variable="SEED" first="0" step="1" last="10"/>
+    <enumeratedValueSet variable="par_hunters_height_stealth">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_hearing_radius">
+      <value value="300"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_visualacuity_sd">
+      <value value="20"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="print-messages">
+      <value value="false"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_visualacuity_mean">
+      <value value="65"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_hearing_radius">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_cooldowntime_max">
+      <value value="800"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_avmax">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_max-shooting-distance">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_height_max">
+      <value value="2"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_group_max_size">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_reactiontime_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="display-mode">
+      <value value="&quot;tracks (hunters)&quot;"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_wind-speed">
+      <value value="20"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_tte_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_cooldowntime_max">
+      <value value="600"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="experiment-hunter-speed" repetitions="1" runMetricsEveryStep="false">
+    <setup>setup</setup>
+    <go>go</go>
+    <postRun>let paramConfig (word "par_hunters_speed_min=" par_hunters_speed_min "_par_hunters_speed_avmax=" par_hunters_speed_avmax)
+export-data paramConfig</postRun>
+    <metric>patch-width</metric>
+    <metric>max-perception-distance</metric>
+    <metric>track-maximum</metric>
+    <metric>good-daylight-duration</metric>
+    <metric>starting-point</metric>
+    <metric>wind-spread-angle</metric>
+    <metric>starting-point-buffer-distance</metric>
+    <metric>obstacle-damage</metric>
+    <metric>track-mark-probability</metric>
+    <metric>track-pregeneration-period</metric>
+    <metric>wind-speed</metric>
+    <metric>wind-direction</metric>
+    <metric>num-hunters</metric>
+    <metric>num-planned-waypoints</metric>
+    <metric>hunters_height_stealth</metric>
+    <metric>hunters_height_min</metric>
+    <metric>hunters_height_max</metric>
+    <metric>hunters_visualacuity_mean</metric>
+    <metric>hunters_visualacuity_sd</metric>
+    <metric>hunters_speed_stealth</metric>
+    <metric>hunters_speed_min</metric>
+    <metric>hunters_speed_max</metric>
+    <metric>hunters_speed_avmax</metric>
+    <metric>hunters_tte_min</metric>
+    <metric>hunters_tte_max</metric>
+    <metric>hunters_reactiontime_min</metric>
+    <metric>hunters_reactiontime_max</metric>
+    <metric>hunters_cooldowntime_min</metric>
+    <metric>hunters_cooldowntime_max</metric>
+    <metric>max-shooting-distance</metric>
+    <metric>hunters_hearing_radius</metric>
+    <metric>hunters_fov</metric>
+    <metric>num-preys</metric>
+    <metric>preys_group_max_size</metric>
+    <metric>preys_safe-distance</metric>
+    <metric>preys_height_min</metric>
+    <metric>preys_height_max</metric>
+    <metric>preys_visualacuity_mean</metric>
+    <metric>preys_visualacuity_sd</metric>
+    <metric>preys_speed_min</metric>
+    <metric>preys_speed_max</metric>
+    <metric>preys_speed_avmax</metric>
+    <metric>preys_tte_min</metric>
+    <metric>preys_tte_max</metric>
+    <metric>preys_reactiontime_min</metric>
+    <metric>preys_reactiontime_max</metric>
+    <metric>preys_cooldowntime_min</metric>
+    <metric>preys_cooldowntime_max</metric>
+    <metric>preys_hearing_radius</metric>
+    <metric>preys_fov</metric>
+    <metric>init-obstacle-scale</metric>
+    <metric>prey-attractor-probability</metric>
+    <metric>attractiveness-to-prey-max</metric>
+    <metric>planned-waypoints</metric>
+    <metric>visited-waypoints</metric>
+    <metric>discarded-waypoints</metric>
+    <metric>hunter-prey-detections</metric>
+    <metric>prey-hunter-detections</metric>
+    <metric>sneaks</metric>
+    <metric>pursues</metric>
+    <metric>shots</metric>
+    <metric>was-bout-successful</metric>
+    <metric>is-bout-finished</metric>
+    <metric>hunter-who-shot</metric>
+    <metric>prey-who-got-shot</metric>
+    <enumeratedValueSet variable="display-waypoints">
+      <value value="true"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_reactiontime_max">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_obstacle-damage">
+      <value value="0.01"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_tte_min">
+      <value value="60"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_fov">
+      <value value="300"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="agent-scale">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_reactiontime_max">
+      <value value="100"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_height_min">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_track-pregeneration-period">
+      <value value="7"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_visualacuity_sd">
+      <value value="15"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_safe-distance">
+      <value value="500"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_height_min">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_init-obstacle-scale">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_starting-point-buffer-distance">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_avmax">
+      <value value="10"/>
+      <value value="15"/>
+      <value value="20"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_cooldowntime_min">
+      <value value="200"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_track-mark-probability">
+      <value value="0.1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_height_max">
+      <value value="2"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_stealth">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_max">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_min">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_tte_max">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-preys">
+      <value value="10"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-hunters">
+      <value value="2"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_fov">
+      <value value="200"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_max">
+      <value value="75"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_prey-attractor-probability">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-planned-waypoints">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_reactiontime_min">
+      <value value="60"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_cooldowntime_min">
+      <value value="400"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_wind-direction">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_tte_max">
+      <value value="100"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_visualacuity_mean">
+      <value value="33"/>
+    </enumeratedValueSet>
+    <steppedValueSet variable="SEED" first="0" step="1" last="10"/>
+    <enumeratedValueSet variable="par_hunters_height_stealth">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_hearing_radius">
+      <value value="300"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_visualacuity_sd">
+      <value value="20"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="print-messages">
+      <value value="false"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_visualacuity_mean">
+      <value value="65"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_hearing_radius">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_cooldowntime_max">
+      <value value="800"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_avmax">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_max-shooting-distance">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_height_max">
+      <value value="2"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_group_max_size">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_min">
+      <value value="2"/>
+      <value value="5"/>
+      <value value="8"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_reactiontime_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="display-mode">
+      <value value="&quot;tracks (hunters)&quot;"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_wind-speed">
+      <value value="20"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_tte_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_cooldowntime_max">
+      <value value="600"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="experiment-numbers2" repetitions="1" runMetricsEveryStep="false">
+    <setup>setup</setup>
+    <go>go</go>
+    <postRun>let paramConfig (word "par_num-preys=" par_num-preys "_par_num-hunters=" par_num-hunters)
+export-data paramConfig</postRun>
+    <metric>patch-width</metric>
+    <metric>max-perception-distance</metric>
+    <metric>track-maximum</metric>
+    <metric>good-daylight-duration</metric>
+    <metric>starting-point</metric>
+    <metric>wind-spread-angle</metric>
+    <metric>starting-point-buffer-distance</metric>
+    <metric>obstacle-damage</metric>
+    <metric>track-mark-probability</metric>
+    <metric>track-pregeneration-period</metric>
+    <metric>wind-speed</metric>
+    <metric>wind-direction</metric>
+    <metric>num-hunters</metric>
+    <metric>num-planned-waypoints</metric>
+    <metric>hunters_height_stealth</metric>
+    <metric>hunters_height_min</metric>
+    <metric>hunters_height_max</metric>
+    <metric>hunters_visualacuity_mean</metric>
+    <metric>hunters_visualacuity_sd</metric>
+    <metric>hunters_speed_stealth</metric>
+    <metric>hunters_speed_min</metric>
+    <metric>hunters_speed_max</metric>
+    <metric>hunters_speed_avmax</metric>
+    <metric>hunters_tte_min</metric>
+    <metric>hunters_tte_max</metric>
+    <metric>hunters_reactiontime_min</metric>
+    <metric>hunters_reactiontime_max</metric>
+    <metric>hunters_cooldowntime_min</metric>
+    <metric>hunters_cooldowntime_max</metric>
+    <metric>max-shooting-distance</metric>
+    <metric>hunters_hearing_radius</metric>
+    <metric>hunters_fov</metric>
+    <metric>num-preys</metric>
+    <metric>preys_group_max_size</metric>
+    <metric>preys_safe-distance</metric>
+    <metric>preys_height_min</metric>
+    <metric>preys_height_max</metric>
+    <metric>preys_visualacuity_mean</metric>
+    <metric>preys_visualacuity_sd</metric>
+    <metric>preys_speed_min</metric>
+    <metric>preys_speed_max</metric>
+    <metric>preys_speed_avmax</metric>
+    <metric>preys_tte_min</metric>
+    <metric>preys_tte_max</metric>
+    <metric>preys_reactiontime_min</metric>
+    <metric>preys_reactiontime_max</metric>
+    <metric>preys_cooldowntime_min</metric>
+    <metric>preys_cooldowntime_max</metric>
+    <metric>preys_hearing_radius</metric>
+    <metric>preys_fov</metric>
+    <metric>init-obstacle-scale</metric>
+    <metric>prey-attractor-probability</metric>
+    <metric>attractiveness-to-prey-max</metric>
+    <metric>planned-waypoints</metric>
+    <metric>visited-waypoints</metric>
+    <metric>discarded-waypoints</metric>
+    <metric>hunter-prey-detections</metric>
+    <metric>prey-hunter-detections</metric>
+    <metric>sneaks</metric>
+    <metric>pursues</metric>
+    <metric>shots</metric>
+    <metric>was-bout-successful</metric>
+    <metric>is-bout-finished</metric>
+    <metric>hunter-who-shot</metric>
+    <metric>prey-who-got-shot</metric>
+    <enumeratedValueSet variable="display-waypoints">
+      <value value="true"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_reactiontime_max">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_obstacle-damage">
+      <value value="0.01"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_tte_min">
+      <value value="60"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_fov">
+      <value value="300"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="agent-scale">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_reactiontime_max">
+      <value value="100"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_height_min">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_track-pregeneration-period">
+      <value value="7"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_visualacuity_sd">
+      <value value="15"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_safe-distance">
+      <value value="500"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_height_min">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_init-obstacle-scale">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_starting-point-buffer-distance">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_avmax">
+      <value value="15"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_cooldowntime_min">
+      <value value="200"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_track-mark-probability">
+      <value value="0.1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_height_max">
+      <value value="2"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_stealth">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_max">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_min">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_tte_max">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-preys">
+      <value value="15"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-hunters">
+      <value value="1"/>
+      <value value="2"/>
+      <value value="3"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_fov">
+      <value value="200"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_max">
+      <value value="75"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_prey-attractor-probability">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-planned-waypoints">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_reactiontime_min">
+      <value value="60"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_cooldowntime_min">
+      <value value="400"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_wind-direction">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_tte_max">
+      <value value="100"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_visualacuity_mean">
+      <value value="33"/>
+    </enumeratedValueSet>
+    <steppedValueSet variable="SEED" first="0" step="1" last="10"/>
+    <enumeratedValueSet variable="par_hunters_height_stealth">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_hearing_radius">
+      <value value="300"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_visualacuity_sd">
+      <value value="20"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="print-messages">
+      <value value="false"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_visualacuity_mean">
+      <value value="65"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_hearing_radius">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_cooldowntime_max">
+      <value value="800"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_avmax">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_max-shooting-distance">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_height_max">
+      <value value="2"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_group_max_size">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_reactiontime_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="display-mode">
+      <value value="&quot;tracks (hunters)&quot;"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_wind-speed">
+      <value value="20"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_tte_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_cooldowntime_max">
+      <value value="600"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="experiment-numbers3" repetitions="1" runMetricsEveryStep="false">
+    <setup>setup</setup>
+    <go>go</go>
+    <postRun>let paramConfig (word "par_num-preys=" par_num-preys "_par_num-hunters=" par_num-hunters)
+export-data paramConfig</postRun>
+    <metric>patch-width</metric>
+    <metric>max-perception-distance</metric>
+    <metric>track-maximum</metric>
+    <metric>good-daylight-duration</metric>
+    <metric>starting-point</metric>
+    <metric>wind-spread-angle</metric>
+    <metric>starting-point-buffer-distance</metric>
+    <metric>obstacle-damage</metric>
+    <metric>track-mark-probability</metric>
+    <metric>track-pregeneration-period</metric>
+    <metric>wind-speed</metric>
+    <metric>wind-direction</metric>
+    <metric>num-hunters</metric>
+    <metric>num-planned-waypoints</metric>
+    <metric>hunters_height_stealth</metric>
+    <metric>hunters_height_min</metric>
+    <metric>hunters_height_max</metric>
+    <metric>hunters_visualacuity_mean</metric>
+    <metric>hunters_visualacuity_sd</metric>
+    <metric>hunters_speed_stealth</metric>
+    <metric>hunters_speed_min</metric>
+    <metric>hunters_speed_max</metric>
+    <metric>hunters_speed_avmax</metric>
+    <metric>hunters_tte_min</metric>
+    <metric>hunters_tte_max</metric>
+    <metric>hunters_reactiontime_min</metric>
+    <metric>hunters_reactiontime_max</metric>
+    <metric>hunters_cooldowntime_min</metric>
+    <metric>hunters_cooldowntime_max</metric>
+    <metric>max-shooting-distance</metric>
+    <metric>hunters_hearing_radius</metric>
+    <metric>hunters_fov</metric>
+    <metric>num-preys</metric>
+    <metric>preys_group_max_size</metric>
+    <metric>preys_safe-distance</metric>
+    <metric>preys_height_min</metric>
+    <metric>preys_height_max</metric>
+    <metric>preys_visualacuity_mean</metric>
+    <metric>preys_visualacuity_sd</metric>
+    <metric>preys_speed_min</metric>
+    <metric>preys_speed_max</metric>
+    <metric>preys_speed_avmax</metric>
+    <metric>preys_tte_min</metric>
+    <metric>preys_tte_max</metric>
+    <metric>preys_reactiontime_min</metric>
+    <metric>preys_reactiontime_max</metric>
+    <metric>preys_cooldowntime_min</metric>
+    <metric>preys_cooldowntime_max</metric>
+    <metric>preys_hearing_radius</metric>
+    <metric>preys_fov</metric>
+    <metric>init-obstacle-scale</metric>
+    <metric>prey-attractor-probability</metric>
+    <metric>attractiveness-to-prey-max</metric>
+    <metric>planned-waypoints</metric>
+    <metric>visited-waypoints</metric>
+    <metric>discarded-waypoints</metric>
+    <metric>hunter-prey-detections</metric>
+    <metric>prey-hunter-detections</metric>
+    <metric>sneaks</metric>
+    <metric>pursues</metric>
+    <metric>shots</metric>
+    <metric>was-bout-successful</metric>
+    <metric>is-bout-finished</metric>
+    <metric>hunter-who-shot</metric>
+    <metric>prey-who-got-shot</metric>
+    <enumeratedValueSet variable="display-waypoints">
+      <value value="true"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_reactiontime_max">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_obstacle-damage">
+      <value value="0.01"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_tte_min">
+      <value value="60"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_fov">
+      <value value="300"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="agent-scale">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_reactiontime_max">
+      <value value="100"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_height_min">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_track-pregeneration-period">
+      <value value="7"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_visualacuity_sd">
+      <value value="15"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_safe-distance">
+      <value value="500"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_height_min">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_init-obstacle-scale">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_starting-point-buffer-distance">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_avmax">
+      <value value="15"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_cooldowntime_min">
+      <value value="200"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_track-mark-probability">
+      <value value="0.1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_height_max">
+      <value value="2"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_stealth">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_max">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_min">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_tte_max">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-preys">
+      <value value="5"/>
+      <value value="10"/>
+      <value value="15"/>
+      <value value="20"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-hunters">
+      <value value="4"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_fov">
+      <value value="200"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_max">
+      <value value="75"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_prey-attractor-probability">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-planned-waypoints">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_reactiontime_min">
+      <value value="60"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_cooldowntime_min">
+      <value value="400"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_wind-direction">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_tte_max">
+      <value value="100"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_visualacuity_mean">
+      <value value="33"/>
+    </enumeratedValueSet>
+    <steppedValueSet variable="SEED" first="0" step="1" last="10"/>
+    <enumeratedValueSet variable="par_hunters_height_stealth">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_hearing_radius">
+      <value value="300"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_visualacuity_sd">
+      <value value="20"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="print-messages">
+      <value value="false"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_visualacuity_mean">
+      <value value="65"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_hearing_radius">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_cooldowntime_max">
+      <value value="800"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_avmax">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_max-shooting-distance">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_height_max">
+      <value value="2"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_group_max_size">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_reactiontime_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="display-mode">
+      <value value="&quot;tracks (hunters)&quot;"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_wind-speed">
+      <value value="20"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_tte_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_cooldowntime_max">
+      <value value="600"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="experiment-numbers4" repetitions="1" runMetricsEveryStep="false">
+    <setup>setup</setup>
+    <go>go</go>
+    <postRun>let paramConfig (word "par_num-preys=" par_num-preys "_par_num-hunters=" par_num-hunters)
+export-data paramConfig</postRun>
+    <metric>patch-width</metric>
+    <metric>max-perception-distance</metric>
+    <metric>track-maximum</metric>
+    <metric>good-daylight-duration</metric>
+    <metric>starting-point</metric>
+    <metric>wind-spread-angle</metric>
+    <metric>starting-point-buffer-distance</metric>
+    <metric>obstacle-damage</metric>
+    <metric>track-mark-probability</metric>
+    <metric>track-pregeneration-period</metric>
+    <metric>wind-speed</metric>
+    <metric>wind-direction</metric>
+    <metric>num-hunters</metric>
+    <metric>num-planned-waypoints</metric>
+    <metric>hunters_height_stealth</metric>
+    <metric>hunters_height_min</metric>
+    <metric>hunters_height_max</metric>
+    <metric>hunters_visualacuity_mean</metric>
+    <metric>hunters_visualacuity_sd</metric>
+    <metric>hunters_speed_stealth</metric>
+    <metric>hunters_speed_min</metric>
+    <metric>hunters_speed_max</metric>
+    <metric>hunters_speed_avmax</metric>
+    <metric>hunters_tte_min</metric>
+    <metric>hunters_tte_max</metric>
+    <metric>hunters_reactiontime_min</metric>
+    <metric>hunters_reactiontime_max</metric>
+    <metric>hunters_cooldowntime_min</metric>
+    <metric>hunters_cooldowntime_max</metric>
+    <metric>max-shooting-distance</metric>
+    <metric>hunters_hearing_radius</metric>
+    <metric>hunters_fov</metric>
+    <metric>num-preys</metric>
+    <metric>preys_group_max_size</metric>
+    <metric>preys_safe-distance</metric>
+    <metric>preys_height_min</metric>
+    <metric>preys_height_max</metric>
+    <metric>preys_visualacuity_mean</metric>
+    <metric>preys_visualacuity_sd</metric>
+    <metric>preys_speed_min</metric>
+    <metric>preys_speed_max</metric>
+    <metric>preys_speed_avmax</metric>
+    <metric>preys_tte_min</metric>
+    <metric>preys_tte_max</metric>
+    <metric>preys_reactiontime_min</metric>
+    <metric>preys_reactiontime_max</metric>
+    <metric>preys_cooldowntime_min</metric>
+    <metric>preys_cooldowntime_max</metric>
+    <metric>preys_hearing_radius</metric>
+    <metric>preys_fov</metric>
+    <metric>init-obstacle-scale</metric>
+    <metric>prey-attractor-probability</metric>
+    <metric>attractiveness-to-prey-max</metric>
+    <metric>planned-waypoints</metric>
+    <metric>visited-waypoints</metric>
+    <metric>discarded-waypoints</metric>
+    <metric>hunter-prey-detections</metric>
+    <metric>prey-hunter-detections</metric>
+    <metric>sneaks</metric>
+    <metric>pursues</metric>
+    <metric>shots</metric>
+    <metric>was-bout-successful</metric>
+    <metric>is-bout-finished</metric>
+    <metric>hunter-who-shot</metric>
+    <metric>prey-who-got-shot</metric>
+    <enumeratedValueSet variable="display-waypoints">
+      <value value="true"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_reactiontime_max">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_obstacle-damage">
+      <value value="0.01"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_tte_min">
+      <value value="60"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_fov">
+      <value value="300"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="agent-scale">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_reactiontime_max">
+      <value value="100"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_height_min">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_track-pregeneration-period">
+      <value value="7"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_visualacuity_sd">
+      <value value="15"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_safe-distance">
+      <value value="500"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_height_min">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_init-obstacle-scale">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_starting-point-buffer-distance">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_avmax">
+      <value value="15"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_cooldowntime_min">
+      <value value="200"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_track-mark-probability">
+      <value value="0.1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_height_max">
+      <value value="2"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_stealth">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_max">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_min">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_tte_max">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-preys">
+      <value value="5"/>
+      <value value="10"/>
+      <value value="15"/>
+      <value value="20"/>
+      <value value="25"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-hunters">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_fov">
+      <value value="200"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_max">
+      <value value="75"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_prey-attractor-probability">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-planned-waypoints">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_reactiontime_min">
+      <value value="60"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_cooldowntime_min">
+      <value value="400"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_wind-direction">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_tte_max">
+      <value value="100"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_visualacuity_mean">
+      <value value="33"/>
+    </enumeratedValueSet>
+    <steppedValueSet variable="SEED" first="0" step="1" last="10"/>
+    <enumeratedValueSet variable="par_hunters_height_stealth">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_hearing_radius">
+      <value value="300"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_visualacuity_sd">
+      <value value="20"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="print-messages">
+      <value value="false"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_visualacuity_mean">
+      <value value="65"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_hearing_radius">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_cooldowntime_max">
+      <value value="800"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_avmax">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_max-shooting-distance">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_height_max">
+      <value value="2"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_group_max_size">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_reactiontime_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="display-mode">
+      <value value="&quot;tracks (hunters)&quot;"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_wind-speed">
+      <value value="20"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_tte_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_cooldowntime_max">
+      <value value="600"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="experiment-hunter-height" repetitions="1" runMetricsEveryStep="false">
+    <setup>setup</setup>
+    <go>go</go>
+    <postRun>let paramConfig (word "par_hunters_speed_min=" par_hunters_speed_min "_par_hunters_speed_avmax=" par_hunters_speed_avmax)
+export-data paramConfig</postRun>
+    <metric>patch-width</metric>
+    <metric>max-perception-distance</metric>
+    <metric>track-maximum</metric>
+    <metric>good-daylight-duration</metric>
+    <metric>starting-point</metric>
+    <metric>wind-spread-angle</metric>
+    <metric>starting-point-buffer-distance</metric>
+    <metric>obstacle-damage</metric>
+    <metric>track-mark-probability</metric>
+    <metric>track-pregeneration-period</metric>
+    <metric>wind-speed</metric>
+    <metric>wind-direction</metric>
+    <metric>num-hunters</metric>
+    <metric>num-planned-waypoints</metric>
+    <metric>hunters_height_stealth</metric>
+    <metric>hunters_height_min</metric>
+    <metric>hunters_height_max</metric>
+    <metric>hunters_visualacuity_mean</metric>
+    <metric>hunters_visualacuity_sd</metric>
+    <metric>hunters_speed_stealth</metric>
+    <metric>hunters_speed_min</metric>
+    <metric>hunters_speed_max</metric>
+    <metric>hunters_speed_avmax</metric>
+    <metric>hunters_tte_min</metric>
+    <metric>hunters_tte_max</metric>
+    <metric>hunters_reactiontime_min</metric>
+    <metric>hunters_reactiontime_max</metric>
+    <metric>hunters_cooldowntime_min</metric>
+    <metric>hunters_cooldowntime_max</metric>
+    <metric>max-shooting-distance</metric>
+    <metric>hunters_hearing_radius</metric>
+    <metric>hunters_fov</metric>
+    <metric>num-preys</metric>
+    <metric>preys_group_max_size</metric>
+    <metric>preys_safe-distance</metric>
+    <metric>preys_height_min</metric>
+    <metric>preys_height_max</metric>
+    <metric>preys_visualacuity_mean</metric>
+    <metric>preys_visualacuity_sd</metric>
+    <metric>preys_speed_min</metric>
+    <metric>preys_speed_max</metric>
+    <metric>preys_speed_avmax</metric>
+    <metric>preys_tte_min</metric>
+    <metric>preys_tte_max</metric>
+    <metric>preys_reactiontime_min</metric>
+    <metric>preys_reactiontime_max</metric>
+    <metric>preys_cooldowntime_min</metric>
+    <metric>preys_cooldowntime_max</metric>
+    <metric>preys_hearing_radius</metric>
+    <metric>preys_fov</metric>
+    <metric>init-obstacle-scale</metric>
+    <metric>prey-attractor-probability</metric>
+    <metric>attractiveness-to-prey-max</metric>
+    <metric>planned-waypoints</metric>
+    <metric>visited-waypoints</metric>
+    <metric>discarded-waypoints</metric>
+    <metric>hunter-prey-detections</metric>
+    <metric>prey-hunter-detections</metric>
+    <metric>sneaks</metric>
+    <metric>pursues</metric>
+    <metric>shots</metric>
+    <metric>was-bout-successful</metric>
+    <metric>is-bout-finished</metric>
+    <metric>hunter-who-shot</metric>
+    <metric>prey-who-got-shot</metric>
+    <enumeratedValueSet variable="display-waypoints">
+      <value value="true"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_reactiontime_max">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_obstacle-damage">
+      <value value="0.01"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_tte_min">
+      <value value="60"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_fov">
+      <value value="300"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="agent-scale">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_reactiontime_max">
+      <value value="100"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_height_min">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_track-pregeneration-period">
+      <value value="7"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_visualacuity_sd">
+      <value value="15"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_safe-distance">
+      <value value="500"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_height_min">
+      <value value="1.3"/>
+      <value value="1.4"/>
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_init-obstacle-scale">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_starting-point-buffer-distance">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_avmax">
+      <value value="15"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_cooldowntime_min">
+      <value value="200"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_track-mark-probability">
+      <value value="0.1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_height_max">
+      <value value="2"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_stealth">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_max">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_min">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_tte_max">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-preys">
+      <value value="10"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-hunters">
+      <value value="2"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_fov">
+      <value value="200"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_max">
+      <value value="75"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_prey-attractor-probability">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-planned-waypoints">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_reactiontime_min">
+      <value value="60"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_cooldowntime_min">
+      <value value="400"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_wind-direction">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_tte_max">
+      <value value="100"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_visualacuity_mean">
+      <value value="33"/>
+    </enumeratedValueSet>
+    <steppedValueSet variable="SEED" first="0" step="1" last="10"/>
+    <enumeratedValueSet variable="par_hunters_height_stealth">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_hearing_radius">
+      <value value="300"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_visualacuity_sd">
+      <value value="20"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="print-messages">
+      <value value="false"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_visualacuity_mean">
+      <value value="65"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_hearing_radius">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_cooldowntime_max">
+      <value value="800"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_avmax">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_max-shooting-distance">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_height_max">
+      <value value="1.6"/>
+      <value value="1.8"/>
+      <value value="2"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_group_max_size">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_reactiontime_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="display-mode">
+      <value value="&quot;tracks (hunters)&quot;"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_wind-speed">
+      <value value="20"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_tte_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_cooldowntime_max">
+      <value value="600"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="experiment-waypoints" repetitions="1" runMetricsEveryStep="false">
+    <setup>setup</setup>
+    <go>go</go>
+    <postRun>let paramConfig (word "par_num-planned-waypoints=" par_num-planned-waypoints)
+export-data paramConfig</postRun>
+    <metric>patch-width</metric>
+    <metric>max-perception-distance</metric>
+    <metric>track-maximum</metric>
+    <metric>good-daylight-duration</metric>
+    <metric>starting-point</metric>
+    <metric>wind-spread-angle</metric>
+    <metric>starting-point-buffer-distance</metric>
+    <metric>obstacle-damage</metric>
+    <metric>track-mark-probability</metric>
+    <metric>track-pregeneration-period</metric>
+    <metric>wind-speed</metric>
+    <metric>wind-direction</metric>
+    <metric>num-hunters</metric>
+    <metric>num-planned-waypoints</metric>
+    <metric>hunters_height_stealth</metric>
+    <metric>hunters_height_min</metric>
+    <metric>hunters_height_max</metric>
+    <metric>hunters_visualacuity_mean</metric>
+    <metric>hunters_visualacuity_sd</metric>
+    <metric>hunters_speed_stealth</metric>
+    <metric>hunters_speed_min</metric>
+    <metric>hunters_speed_max</metric>
+    <metric>hunters_speed_avmax</metric>
+    <metric>hunters_tte_min</metric>
+    <metric>hunters_tte_max</metric>
+    <metric>hunters_reactiontime_min</metric>
+    <metric>hunters_reactiontime_max</metric>
+    <metric>hunters_cooldowntime_min</metric>
+    <metric>hunters_cooldowntime_max</metric>
+    <metric>max-shooting-distance</metric>
+    <metric>hunters_hearing_radius</metric>
+    <metric>hunters_fov</metric>
+    <metric>num-preys</metric>
+    <metric>preys_group_max_size</metric>
+    <metric>preys_safe-distance</metric>
+    <metric>preys_height_min</metric>
+    <metric>preys_height_max</metric>
+    <metric>preys_visualacuity_mean</metric>
+    <metric>preys_visualacuity_sd</metric>
+    <metric>preys_speed_min</metric>
+    <metric>preys_speed_max</metric>
+    <metric>preys_speed_avmax</metric>
+    <metric>preys_tte_min</metric>
+    <metric>preys_tte_max</metric>
+    <metric>preys_reactiontime_min</metric>
+    <metric>preys_reactiontime_max</metric>
+    <metric>preys_cooldowntime_min</metric>
+    <metric>preys_cooldowntime_max</metric>
+    <metric>preys_hearing_radius</metric>
+    <metric>preys_fov</metric>
+    <metric>init-obstacle-scale</metric>
+    <metric>prey-attractor-probability</metric>
+    <metric>attractiveness-to-prey-max</metric>
+    <metric>planned-waypoints</metric>
+    <metric>visited-waypoints</metric>
+    <metric>discarded-waypoints</metric>
+    <metric>hunter-prey-detections</metric>
+    <metric>prey-hunter-detections</metric>
+    <metric>sneaks</metric>
+    <metric>pursues</metric>
+    <metric>shots</metric>
+    <metric>was-bout-successful</metric>
+    <metric>is-bout-finished</metric>
+    <metric>hunter-who-shot</metric>
+    <metric>prey-who-got-shot</metric>
+    <enumeratedValueSet variable="display-waypoints">
+      <value value="true"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_reactiontime_max">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_obstacle-damage">
+      <value value="0.01"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_tte_min">
+      <value value="60"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_fov">
+      <value value="300"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="agent-scale">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_reactiontime_max">
+      <value value="100"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_height_min">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_track-pregeneration-period">
+      <value value="7"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_visualacuity_sd">
+      <value value="15"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_safe-distance">
+      <value value="500"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_height_min">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_init-obstacle-scale">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_starting-point-buffer-distance">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_avmax">
+      <value value="15"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_cooldowntime_min">
+      <value value="200"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_track-mark-probability">
+      <value value="0.1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_height_max">
+      <value value="2"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_stealth">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_max">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_min">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_tte_max">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-preys">
+      <value value="10"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-hunters">
+      <value value="2"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_fov">
+      <value value="200"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_max">
+      <value value="75"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_prey-attractor-probability">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <steppedValueSet variable="par_num-planned-waypoints" first="1" step="2" last="10"/>
+    <enumeratedValueSet variable="par_preys_reactiontime_min">
+      <value value="60"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_cooldowntime_min">
+      <value value="400"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_wind-direction">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_tte_max">
+      <value value="100"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_visualacuity_mean">
+      <value value="33"/>
+    </enumeratedValueSet>
+    <steppedValueSet variable="SEED" first="0" step="1" last="10"/>
+    <enumeratedValueSet variable="par_hunters_height_stealth">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_hearing_radius">
+      <value value="300"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_visualacuity_sd">
+      <value value="20"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="print-messages">
+      <value value="false"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_visualacuity_mean">
+      <value value="65"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_hearing_radius">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_cooldowntime_max">
+      <value value="800"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_avmax">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_max-shooting-distance">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_height_max">
+      <value value="2"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_group_max_size">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_reactiontime_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="display-mode">
+      <value value="&quot;tracks (hunters)&quot;"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_wind-speed">
+      <value value="20"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_tte_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_cooldowntime_max">
+      <value value="600"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="experiment-prey-attractivess" repetitions="1" runMetricsEveryStep="false">
+    <setup>setup</setup>
+    <go>go</go>
+    <postRun>let paramConfig (word "par_prey-attractor-probability=" par_prey-attractor-probability)
+export-data paramConfig</postRun>
+    <metric>patch-width</metric>
+    <metric>max-perception-distance</metric>
+    <metric>track-maximum</metric>
+    <metric>good-daylight-duration</metric>
+    <metric>starting-point</metric>
+    <metric>wind-spread-angle</metric>
+    <metric>starting-point-buffer-distance</metric>
+    <metric>obstacle-damage</metric>
+    <metric>track-mark-probability</metric>
+    <metric>track-pregeneration-period</metric>
+    <metric>wind-speed</metric>
+    <metric>wind-direction</metric>
+    <metric>num-hunters</metric>
+    <metric>num-planned-waypoints</metric>
+    <metric>hunters_height_stealth</metric>
+    <metric>hunters_height_min</metric>
+    <metric>hunters_height_max</metric>
+    <metric>hunters_visualacuity_mean</metric>
+    <metric>hunters_visualacuity_sd</metric>
+    <metric>hunters_speed_stealth</metric>
+    <metric>hunters_speed_min</metric>
+    <metric>hunters_speed_max</metric>
+    <metric>hunters_speed_avmax</metric>
+    <metric>hunters_tte_min</metric>
+    <metric>hunters_tte_max</metric>
+    <metric>hunters_reactiontime_min</metric>
+    <metric>hunters_reactiontime_max</metric>
+    <metric>hunters_cooldowntime_min</metric>
+    <metric>hunters_cooldowntime_max</metric>
+    <metric>max-shooting-distance</metric>
+    <metric>hunters_hearing_radius</metric>
+    <metric>hunters_fov</metric>
+    <metric>num-preys</metric>
+    <metric>preys_group_max_size</metric>
+    <metric>preys_safe-distance</metric>
+    <metric>preys_height_min</metric>
+    <metric>preys_height_max</metric>
+    <metric>preys_visualacuity_mean</metric>
+    <metric>preys_visualacuity_sd</metric>
+    <metric>preys_speed_min</metric>
+    <metric>preys_speed_max</metric>
+    <metric>preys_speed_avmax</metric>
+    <metric>preys_tte_min</metric>
+    <metric>preys_tte_max</metric>
+    <metric>preys_reactiontime_min</metric>
+    <metric>preys_reactiontime_max</metric>
+    <metric>preys_cooldowntime_min</metric>
+    <metric>preys_cooldowntime_max</metric>
+    <metric>preys_hearing_radius</metric>
+    <metric>preys_fov</metric>
+    <metric>init-obstacle-scale</metric>
+    <metric>prey-attractor-probability</metric>
+    <metric>attractiveness-to-prey-max</metric>
+    <metric>planned-waypoints</metric>
+    <metric>visited-waypoints</metric>
+    <metric>discarded-waypoints</metric>
+    <metric>hunter-prey-detections</metric>
+    <metric>prey-hunter-detections</metric>
+    <metric>sneaks</metric>
+    <metric>pursues</metric>
+    <metric>shots</metric>
+    <metric>was-bout-successful</metric>
+    <metric>is-bout-finished</metric>
+    <metric>hunter-who-shot</metric>
+    <metric>prey-who-got-shot</metric>
+    <enumeratedValueSet variable="display-waypoints">
+      <value value="true"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_reactiontime_max">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_obstacle-damage">
+      <value value="0.01"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_tte_min">
+      <value value="60"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_fov">
+      <value value="300"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="agent-scale">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_reactiontime_max">
+      <value value="100"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_height_min">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_track-pregeneration-period">
+      <value value="7"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_visualacuity_sd">
+      <value value="15"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_safe-distance">
+      <value value="500"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_height_min">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_init-obstacle-scale">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_starting-point-buffer-distance">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_avmax">
+      <value value="15"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_cooldowntime_min">
+      <value value="200"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_track-mark-probability">
+      <value value="0.1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_height_max">
+      <value value="2"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_stealth">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_max">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_min">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_tte_max">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-preys">
+      <value value="10"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-hunters">
+      <value value="2"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_fov">
+      <value value="200"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_max">
+      <value value="75"/>
+    </enumeratedValueSet>
+    <steppedValueSet variable="par_prey-attractor-probability" first="1" step="2" last="20"/>
+    <enumeratedValueSet variable="par_num-planned-waypoints">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_reactiontime_min">
+      <value value="60"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_cooldowntime_min">
+      <value value="400"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_wind-direction">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_tte_max">
+      <value value="100"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_visualacuity_mean">
+      <value value="33"/>
+    </enumeratedValueSet>
+    <steppedValueSet variable="SEED" first="0" step="1" last="10"/>
+    <enumeratedValueSet variable="par_hunters_height_stealth">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_hearing_radius">
+      <value value="300"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_visualacuity_sd">
+      <value value="20"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="print-messages">
+      <value value="false"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_visualacuity_mean">
+      <value value="65"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_hearing_radius">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_cooldowntime_max">
+      <value value="800"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_avmax">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_max-shooting-distance">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_height_max">
+      <value value="2"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_group_max_size">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_reactiontime_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="display-mode">
+      <value value="&quot;tracks (hunters)&quot;"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_wind-speed">
+      <value value="20"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_tte_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_cooldowntime_max">
+      <value value="600"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="experiment-scenarios" repetitions="1" runMetricsEveryStep="false">
+    <setup>setup</setup>
+    <go>go</go>
+    <postRun>let paramConfig (word "scenario-environment=" scenario-environment "_waypoints-to-prey-attractors=" waypoints-to-prey-attractors)
+export-data paramConfig</postRun>
+    <metric>patch-width</metric>
+    <metric>max-perception-distance</metric>
+    <metric>track-maximum</metric>
+    <metric>good-daylight-duration</metric>
+    <metric>starting-point</metric>
+    <metric>wind-spread-angle</metric>
+    <metric>starting-point-buffer-distance</metric>
+    <metric>obstacle-damage</metric>
+    <metric>track-mark-probability</metric>
+    <metric>track-pregeneration-period</metric>
+    <metric>wind-speed</metric>
+    <metric>wind-direction</metric>
+    <metric>num-hunters</metric>
+    <metric>num-planned-waypoints</metric>
+    <metric>hunters_height_stealth</metric>
+    <metric>hunters_height_min</metric>
+    <metric>hunters_height_max</metric>
+    <metric>hunters_visualacuity_mean</metric>
+    <metric>hunters_visualacuity_sd</metric>
+    <metric>hunters_speed_stealth</metric>
+    <metric>hunters_speed_min</metric>
+    <metric>hunters_speed_max</metric>
+    <metric>hunters_speed_avmax</metric>
+    <metric>hunters_tte_min</metric>
+    <metric>hunters_tte_max</metric>
+    <metric>hunters_reactiontime_min</metric>
+    <metric>hunters_reactiontime_max</metric>
+    <metric>hunters_cooldowntime_min</metric>
+    <metric>hunters_cooldowntime_max</metric>
+    <metric>max-shooting-distance</metric>
+    <metric>hunters_hearing_radius</metric>
+    <metric>hunters_fov</metric>
+    <metric>num-preys</metric>
+    <metric>preys_group_max_size</metric>
+    <metric>preys_safe-distance</metric>
+    <metric>preys_height_min</metric>
+    <metric>preys_height_max</metric>
+    <metric>preys_visualacuity_mean</metric>
+    <metric>preys_visualacuity_sd</metric>
+    <metric>preys_speed_min</metric>
+    <metric>preys_speed_max</metric>
+    <metric>preys_speed_avmax</metric>
+    <metric>preys_tte_min</metric>
+    <metric>preys_tte_max</metric>
+    <metric>preys_reactiontime_min</metric>
+    <metric>preys_reactiontime_max</metric>
+    <metric>preys_cooldowntime_min</metric>
+    <metric>preys_cooldowntime_max</metric>
+    <metric>preys_hearing_radius</metric>
+    <metric>preys_fov</metric>
+    <metric>init-obstacle-scale</metric>
+    <metric>init-obstacle-frequency</metric>
+    <metric>init-obstacle-diffuse-times</metric>
+    <metric>init-obstacle-diffuse-rate</metric>
+    <metric>prey-attractor-probability</metric>
+    <metric>attractiveness-diffuse-times</metric>
+    <metric>attractiveness-diffuse-rate</metric>
+    <metric>fires-number</metric>
+    <metric>fires-radius</metric>
+    <metric>attractiveness-to-prey-max</metric>
+    <metric>planned-waypoints</metric>
+    <metric>visited-waypoints</metric>
+    <metric>discarded-waypoints</metric>
+    <metric>hunter-prey-detections</metric>
+    <metric>prey-hunter-detections</metric>
+    <metric>sneaks</metric>
+    <metric>pursues</metric>
+    <metric>shots</metric>
+    <metric>was-bout-successful</metric>
+    <metric>is-bout-finished</metric>
+    <metric>hunter-who-shot</metric>
+    <metric>prey-who-got-shot</metric>
+    <enumeratedValueSet variable="par_obstacle-damage">
+      <value value="0.01"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_reactiontime_max">
+      <value value="500"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_fov">
+      <value value="300"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_track-pregeneration-period">
+      <value value="7"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_safe-distance">
+      <value value="500"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_init-obstacle-scale">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_track-mark-probability">
+      <value value="0.1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_cooldowntime_min">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_height_max">
+      <value value="100"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_stealth">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_init-obstacle-diffuse-times">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_max">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_tte_max">
+      <value value="600"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-hunters">
+      <value value="2"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_fov">
+      <value value="200"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-planned-waypoints">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_init-obstacle-frequency">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_max">
+      <value value="75"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_tte_max">
+      <value value="100"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_visualacuity_mean">
+      <value value="33"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_visualacuity_sd">
+      <value value="20"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_attractiveness-diffuse-times">
+      <value value="10"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_hearing_radius">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_cooldowntime_max">
+      <value value="800"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_fires-radius">
+      <value value="3"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_height_max">
+      <value value="500"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_group_max_size">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_reactiontime_min">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="display-mode">
+      <value value="&quot;attractiveness-to-prey&quot;"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_fires-number">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_tte_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="display-waypoints">
+      <value value="true"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_tte_min">
+      <value value="6"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="agent-scale">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_reactiontime_max">
+      <value value="100"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_height_min">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_visualacuity_sd">
+      <value value="15"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_height_min">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_starting-point-buffer-distance">
+      <value value="1.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_speed_avmax">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="scenario-environment">
+      <value value="&quot;default&quot;"/>
+      <value value="&quot;wet and no fires&quot;"/>
+      <value value="&quot;dry and no fires&quot;"/>
+      <value value="&quot;wet with fires&quot;"/>
+      <value value="&quot;dry with fires&quot;"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_min">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_num-preys">
+      <value value="10"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_cooldowntime_min">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_prey-attractor-probability">
+      <value value="49"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_reactiontime_min">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_attractiveness-diffuse-rate">
+      <value value="0.3"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_wind-direction">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_height_stealth">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_hearing_radius">
+      <value value="300"/>
+    </enumeratedValueSet>
+    <steppedValueSet variable="SEED" first="0" step="1" last="9"/>
+    <enumeratedValueSet variable="print-messages">
+      <value value="false"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_hunters_visualacuity_mean">
+      <value value="65"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_speed_avmax">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_max-shooting-distance">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_wind-speed">
+      <value value="20"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_preys_cooldowntime_max">
+      <value value="600"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="par_init-obstacle-diffuse-rate">
+      <value value="0.3"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="waypoints-to-prey-attractors">
+      <value value="false"/>
+      <value value="true"/>
+    </enumeratedValueSet>
+  </experiment>
+</experiments>
 @#$#@#$#@
 @#$#@#$#@
 default
