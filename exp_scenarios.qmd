@@ -20,6 +20,10 @@ source("library/tripleRaster_twoParameters.R")
 source("library/tripleRaster_fourParameters.R")
 ```
 
+```{r}
+stderror <- function(x) sd(x)/sqrt(length(x))
+```
+
 ## Load experiment data
 
 Define path to files:
@@ -49,9 +53,19 @@ exp_scenarios_long <- exp_scenarios %>%
   select(SEED, scenario_environment, par_hunters_height_max, was_bout_successful) %>%
   pivot_longer(cols = c(scenario_environment), names_to = "parameter", values_to = "value")
 
-exp_scenarios_short <- exp_scenarios %>%
+exp_scenarios_short <-  exp_scenarios %>%
   group_by(scenario_environment, waypoints_to_prey_attractors) %>%
-  summarise(success_rate = mean(was_bout_successful), .groups = "keep")
+  summarise(success_rate = mean(was_bout_successful), success_rate_stde = stderror(was_bout_successful), .groups = "keep") %>%
+  mutate(lower = success_rate - success_rate_stde, upper = min(c(1, success_rate + success_rate_stde)))
+
+exp_scenarios_shortest <- exp_scenarios %>%
+  mutate(scenario = paste(scenario_environment, ifelse(waypoints_to_prey_attractors, "(waypoints to attractors)", "(random waypoints)"))) %>%
+  group_by(scenario) %>%
+  summarise(success_rate = mean(was_bout_successful), success_rate_stde = stderror(was_bout_successful), .groups = "keep") %>%
+  mutate(lower = success_rate - success_rate_stde, upper = min(c(1, success_rate + success_rate_stde)))
+scenario_names <- unique(exp_scenarios_shortest$scenario)
+scenario_names <- gsub("and no", "without", scenario_names)
+scenario_names <- gsub("\\s", "\n", scenario_names)
 ```
 
 Load trajectories:
@@ -75,9 +89,12 @@ table(exp_scenarios$scenario_environment, exp_scenarios$init.obstacle.frequency)
 ```
 
 ```{r}
-table(exp_scenarios$scenario_environment, exp_scenarios$waypoints.to.prey.attractors)
+table(exp_scenarios$scenario_environment, exp_scenarios$waypoints_to_prey_attractors)
 ```
 
+```{r}
+table(exp_scenarios_shortest$scenario, exp_scenarios_shortest$success_rate)
+```
 
 ## Plot
 
@@ -87,20 +104,26 @@ ggplot(exp_scenarios) +
 ```
 
 ```{r}
-ggplot(exp_scenarios_short, aes(x = scenario_environment, y = success_rate)) + geom_point()
+ggplot(exp_scenarios_shortest, aes(x = scenario, y = success_rate)) + 
+  geom_point() +
+  scale_x_discrete(labels = scenario_names)
 ```
 
 ```{r}
+scenario_colors <- sort(rep(rainbow(5), 2))
 plotName <- "plots/scenarios-success-rate.png" 
-png(plotName, height = 600, width = 800)
-ggplot(exp_scenarios_short,
-       aes(x = scenario_environment, 
+png(plotName, height = 600, width = 2200)
+ggplot(exp_scenarios_shortest,
+       aes(x = scenario, 
            y = success_rate)) +
-  geom_col() +
+  #geom_point() +
+  geom_crossbar(aes(ymin = lower, ymax = upper, colour = scenario_colors), linewidth = 2, show.legend = FALSE) +
+  scale_x_discrete(labels = scenario_names) +
   labs(x = "scenario", y = "success rate") +
   theme(
-    axis.title = element_text(size = 15),
-    axis.text = element_text(size = 15)
+    axis.title = element_text(size = 30),
+    axis.text.y = element_text(size = 25),
+    axis.text.x= element_text(size=25)#, angle=30, vjust=.8, hjust=0.8)
   )
 dev.off()
 ```
