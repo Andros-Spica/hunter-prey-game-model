@@ -98,8 +98,7 @@ The main steps per second (tick) include:
 
 The internal logic for agent decisions and state transitions within the hunting bout is further detailed by a **finite-state machine**. For example, hunters can transition between default, blind approach, stealth approach, pursue, shoot, and pause (cooling down) states, based on detection, reaction time, distance to prey, and exhaustion levels. Similarly, prey agents transition between default, running away (escape), moving away (avoidance), and pause (cooling down) states based on detection, reaction time, distance to hunters, and exhaustion levels.
 
-States and state transitions for hunters (right) and prey (left)
-![States and state transitions for hunters (right) and prey (left)](docs/finite-state-machine.png)
+<img title="States and state transitions for hunters (right) and prey (left)" alt="States and state transitions for hunters (right) and prey (left)" src="docs/finite-state-machine.png" width="500px">
 
 <img title="Alertness, reaction and relaxation" alt="Alertness, reaction and relaxation" src="docs/alertness.png" width="500px">
 
