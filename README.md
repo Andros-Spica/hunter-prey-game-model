@@ -1,170 +1,118 @@
 # Agent-Based Modeling of Traditional Bow-and-Arrow Hunting: A Simulation approach to Hunter and Prey Behavior
 Repository for simulation models about traditional bow-and-arrow hunting, created within the framework of the [Modelling Prehistoric Hunting (MPJ) project](https://mpj.uni-koeln.de/).
 
-# Design concepts
+The Modelling Prehistoric Hunting (MPJ) project, which expanded upon the [Indigenous Knowledge and Archaeoinformatics (IKAi) project](https://ikai.phil-fak.uni-koeln.de/en/), employed agent-based modelling to simulate dynamic human-animal interactions under changing environmental conditions. The IKAi project's collected datasets significantly informed and benefited these models, contributing to a better understanding of how climatic variation may have influenced the survival of hunter-gatherer groups.
 
-Agent-based modelling informed by empirical and ethnographic studies of traditional bow-and-arrow hunting with poisonous arrows.
+## Model Design Concepts
 
-Hunting phases: 
-1. planning 
-2. hunting bout – modes:  
-   1. searching
-   2. tracking
-   3. spotting/approaching 
-   4. pursuing 
-   5. shooting 
-3. retrieval and butchering/processing
+### Hunting Phases
+The simulation conceptualises hunting as a multi-phase process:
 
-Other practices affecting hunting and foraging success (Niche construction): 
-* Fire management  
-* Monitoring and managing key non-prey species, such as elephants and large predators
+1. **Planning**: This phase involves cooperation and tool availability for hunting, often including discussions of routes based on wind and prior observations.
+   
+3. **Hunting Bout**: This is the core of the simulation, encompassing various movement modes.  
 
-## The Hunting Bout
+4. **Retrieval and Butchering/Processing**: The final phase, where group size impacts the probability of retrieving complete and fresh prey.
 
-The Hunting bout concepts towards a model:
+Beyond these core hunting phases, the model also incorporates "niche construction" practices that affect hunting and foraging success, such as fire management and the monitoring and managing key non-prey species like elephants and large predators. This suggests that hunter-gatherers are not merely passive foragers but can actively transform their environment to increase hunting success and survival chances.
 
-- Sequence of modes
-- Often not linear (e.g., interrupted tracks, pursue not feasible, etc)
-- Ends with: 
-  - a successful shot, or
-  - when hunters desist, considering success to be unlikely 
-- Scale of seconds to hours, and metres to kilometres
-The hunting bout contains phases from tracking to shooting, given that the sequence is often not a linear progression (e.g., tracking leads to dead ends, pursuit is not possible, etc.).
-- Opposed goals: Hunters want to shoot and kill prey, and prey wants to escape hunters unharmed.
-A hunting bout ends if there is a successful shot or when hunters desist, e.g., by considering that future shots will be unlikely. 
-- The hunting bout develops in the scale of hours and metres.
-- A complex game of presence, perception, stamina, speed, technology, and skill. The balance between the number of hunters for boosting perception and stealth to minimize the presence of the hunting party.
-  - Hunters’ best outcome is approaching and shooting prey without first being detected.
-  Prey’s best outcome is to detect hunters before they approach or to avoid detection altogether.
-- Hunter and prey properties that modify (increase or decrease) presence (e.g., camouflage, stealth skill, body size, etc.), perception (e.g., sight and auditory capabilities), speed, and stamina (genetic potential and current health state).  
-- Mechanisms:
-  - Movement
-    - Prey: default (non-alert), flee (alert)
-    - Hunter: search, track, stealth approach, pursue, pause 
-  - Line-of-sight
-  - Sound propagation and detection 
-  - Smell cloud and detection (only prey)  
-- Hunter/prey properties
-  - Height (proxy of presence, e.g., body weight, camouflage, stealth)
-  - Speed (minimum and maximum)
-  - Time to exhaustion (proxy of “stamina”, maximum VO2).
-  - Reaction time (proxy of sensory and cognitive capabilities)
-  - Group size increases both presence and perception (intrinsic trade-off)
-  - Group composition/assets: tools and skills vary between and within hunting groups, giving a critical edge or disadvantage (e.g., tracking skills, stealth, strength of poison, quality of arrows, etc)
-- Environmental conditions
-  - Terrain morphology (elevation model)
-  - Ground cover
-  - Permeable obstacles (all vegetation)
-  - Prey attractors (some vegetation, water sources, shade)
-  - Prey repellers
-  - Wind intensity and direction
-  - Temperature
-  - Overarching factors: ecological zones, seasons, fire management, key fauna (elephants, non-human predators, etc.)
+## The Hunting Bout Model
 
-## Planning, retrieving and butchering/processing
+The hunting bout is designed as a sequence of modes, which are often non-linear, acknowledging that actual hunting can involve interruptions, dead ends, or changes in strategy. A hunting bout concludes with a successful shot or when hunters decide that success is unlikely and desist. The simulation operates on a scale ranging from seconds to hours, and metres to kilometres.
 
-Planning and retrieving are the critical phases for cooperation and tool availability for hunting.
+The Hunting Bout Model interface in NetLogo
+![The Hunting Bout Model interface in NetLogo](docs/screenshots/huntingBout%20example%20interface_success3_hunter-trajectory.png)
 
-Group size impacts the probability of hunting success and the probability of retrieving complete and fresh prey once shot.
+The fundamental interaction in the hunting bout is a "complex game of presence, perception, stamina, speed, technology, and skill". Hunters aim to approach and shoot prey undetected, while prey seek to detect hunters or avoid detection altogether. The balance between the number of hunters is crucial, as it boosts perception and increases the hunting party's presence, requiring greater stealth.
 
-# Details
+### Hunter and Prey Properties
+Both hunter and prey agents possess specific properties that influence their behaviour and interactions:
 
-## Initialisation (`setup`)
+- Height: A proxy for presence, influenced by factors like body weight, camouflage, and stealth.  
+- Speed: Defined by minimum, maximum, and average maximum values.  
+- Time to Exhaustion (Stamina): A proxy for maximum VO2.  
+- Reaction Time: Represents sensory and cognitive capabilities.  
+- Visual Acuity: A percentage of the maximum perception distance.  
+- Hearing Radius and Field of View (FoV): Define auditory and visual detection ranges.  
+- Group Size: Increases presence and perception, representing an intrinsic trade-off.  
+- Group Composition/Assets: Tools and skills (e.g., tracking skills, stealth, poison strength, arrow quality) vary and can provide an advantage or disadvantage.
 
-Summary of steps:  
-1. **`clear-all`**: Clears any existing data, resetting the simulation environment.
+### Mechanisms
+The model incorporates several key mechanisms to simulate realistic interactions:
 
-2. **`set-input`**: Calls another procedure that sets up simulation constants and parameters:
+- Movement: Different modes for prey (default, flee) and hunters (search, track, stealth approach, pursue, pause).
+- Line-of-Sight: Accounts for permeable obstacles like vegetation.
+- Sound Propagation and Detection: Influenced by the stealth of hunters.
+- Smell Cloud and Detection: Specific to prey, influenced by wind speed and direction.
+- Environmental Conditions: The simulated environment plays a significant role, affecting agent behaviour and hunting success:
+- Terrain Morphology: Defined by an elevation model.
+- Permeable Obstacles: Including all vegetation.
+- Prey Attractiveness: This represents the distribution of elements such as edible vegetation, water sources, and shade.
+- Wind Intensity and Direction: Crucial for hunters to avoid being scented by animals.
+- Ecological Zones/Seasons, Fire Management: Broader factors influencing the environmental setup.
 
-   - **`set-constants`**: Defines fixed values (like dimensions and perception ranges).
+Line of sight with permeable obstacles (i.e. vegetation)
+![Line of sight with permeable obstacles (i.e. vegetation)](docs/line-of-sight-updated-v2.png)
 
-   - **`set-parameters`**: Sets various parameters, potentially randomizing some aspects to simulate variability in the environment and agents.
+Hearing radius
+![Hearing radius](docs/hearing-radius.png)
 
-3. **Environment and Agent Initialization**:
+### Model Initialisation
+The setup procedure initialises the simulation environment and agents. This involves:
 
-   - **`setup-environment`**: Configures the environment, including obstacles and prey attraction sites.
+1. Clearing Data: Resets the simulation environment.
+   
+3. Setting Inputs: Defines fixed constants (e.g., patch-width, max-perception-distance, good-daylight-duration, wind-spread-angle) and various parameters for environmental characteristics, hunters, and prey (e.g., num-hunters, max-shooting-distance, num-preys, prey-attractor-probability).  
 
-   - **`setup-prey-groups`**: Creates groups of prey agents, assigning positions and attributes like speed and sight range.
+4. Environment Setup: Configures obstacles, prey attraction sites, and can simulate different scenarios (e.g., "wet and no fires," "dry with fires") by setting parameters like init-obstacle-scale and fires-number.  
 
-   - **`setup-hunting-party`**: Sets up hunters with attributes like height, speed, and perception.
+5. Prey Groups Setup: Creates prey agents, assigns them to groups, and positions them on the map, often away from the starting point to simulate unassigned areas. It also generates initial track-makers for pre-existing tracks, simulating recent prey activity.  
 
-4. **Perceptions and Tracks**:
+6. Hunting Party Setup: Spawns hunter agents at a designated starting point, assigning their attributes, and defining planned waypoints for their movement. These waypoints can be influenced by prey attractiveness.  
 
-   - **`initialise-perceptions`**: Initializes each agent’s perception links to detect others (e.g., prey detecting hunters).
+7. Perceptions Initialisation: Establishes perception links between agents (hunters and prey) to allow them to detect each other.  
 
-   - **`generate-recent-tracks`**: Generates tracks for the prey, which can be followed by hunters.
+8. Output Initialisation: Resets variables that track simulation outcomes, such as hunter-prey-detections, shots, and was-bout-successful.  
 
-5. **Output and Display**:
+### Simulation Steps
+The go procedure drives the simulation, orchestrating agent behaviours in a continuous cycle. Each agent reacts based on immediate sightings, memory of past interactions, and environmental context.
 
-   - **`initialise-output`**: Resets or initializes variables used for tracking the simulation outcomes.
-
-   - **`update-display`**: Updates the visual display to reflect the initial state.
-
-6. **`reset-ticks`**: Resets the tick counter to begin the simulation time from zero.
-
-## Simulation step (`go`)
-
-The `go` procedure orchestrates the behavior of prey and hunter agents in a simulated hunting bout. Each agent (prey or hunter) reacts based on sightings, memory of previous interactions, and environmental context.
-
-Hunting bout: overall cycle (per second)
+Overall cycle (per second)
 ![Hunting bout: overall cycle (per second)](docs/behaviour-diagrams_cycle.png)
 
-Summary of steps:
+The main steps per second (tick) include:
+1. **Detection-Based Reactions**: Agents (prey and hunters) check for immediate sightings.
+    - Prey: If a hunter is seen, the prey flees or plans action based on reaction time. If they receive a message from fleeing group members, they will follow along.
+    - Hunters: If prey is seen, hunters decide whether to shoot (if within range), pursue (if too far to shoot or prey is alerted), or stealthily approach (if undetected). A successful shot can lead to the hunt's success and signal the hunters to return to camp.
 
-1. **Sight-Based Reactions**:
+2. **Memory-Based Movements**: Agents without immediate sightings but with memory of previous targets.
+    - Prey: Move away from the last known sighting until a safe distance is reached.
+    - Hunters: Move towards the last known sighting blindly, potentially assuming a stealth posture if the target is close.
 
-   - Agents (prey and hunters) check for immediate sightings. 
+3. **Communication and Alerts**: Agents can communicate their status and memory.
+    - Prey: Mimic movement based on other fleeing prey.
+    - Hunters: Share success, stealth status, and unseen target locations with other hunters.
 
-   - **Prey**: If they see a hunter, they either flee or plan action based on reaction time.
-  
-   - **Hunters**: If a prey is seen, they decide to either shoot, pursue, or stealthily approach depending on distance and if they are detected.
+4. **Default Movements**: Agents with no recent sightings or memory.
+    - Prey: Random movement modified by group cohesion and patch attractiveness, representing the browse or graze of vegetation, resting, and digesting.
+    - Hunters: Track recent prey tracks or explore the area, following planned waypoints or moving towards areas of interest. Hunters often follow existing tracks or, when no tracks are found, will "search" by moving towards planned waypoints.
 
-2. **Hunter Actions**:
+5. **Environmental and Status Updates**: Prey checks escape conditions (e.g., if they moved out of the hunting area). Both prey and hunters update their perception, interact with the environment (e.g., clearing vegetation obstacles by moving through them, leaving tracks), and check for exhaustion and cooldown conditions.
 
-   - **Shoot**: Attempts to shoot the nearest prey within range.
+6. **End Condition**: The simulation stops if a successful shot occurs or a hunter returns to camp after a hunt.
 
-   - **Pursue**: Chase fleeing prey if too far to shoot.
+The internal logic for agent decisions and state transitions within the hunting bout is further detailed by a **finite-state machine**. For example, hunters can transition between default, blind approach, stealth approach, pursue, shoot, and pause (cooling down) states, based on detection, reaction time, distance to prey, and exhaustion levels. Similarly, prey agents transition between default, running away (escape), moving away (avoidance), and pause (cooling down) states based on detection, reaction time, distance to hunters, and exhaustion levels.
 
-   - **Approach Stealthily**: Move towards prey using stealth.
+States and state transitions for hunters (right) and prey (left)
+![States and state transitions for hunters (right) and prey (left)](docs/finite-state-machine.png)
 
-3. **Memory-Based Movements**:
-
-   - Agents who haven’t moved and have memory of previous targets:
-
-     - **Prey**: Move away from the last known sighting.
-
-     - **Hunters**: Move towards the last known sighting blindly.
-
-4. **Communication and Alerts**:
-  
-   - If an agent has messages (e.g., received from other agents):
-
-     - **Prey**: mimic movement based on other fleeing prey.
-  
-     - **Hunters**: Communicate their status and memory to other hunters.
-
-5. **Default Movements**:
-   - Agents with no recent sightings:
-
-     - **Prey**: Browse or graze vegetation, rest, digest, perform other behaviours unrelated to the hunt, adjust position based on group and patch attractiveness.
-
-     - **Hunters**: Track recent prey tracks or explore the area.
-
-Hunting bout: movement modes (states with transitions)
-![Hunting bout: movement modes](docs/behaviour-diagrams-prey-state.png)
-
-Hunting bout: alertness, reaction and relaxation
+Alertness, reaction and relaxation
 ![Hunting bout: alertness, reaction and relaxation](docs/alertness.png)
 
-5. **Environmental and Status Updates**:
+To facilitate movement, the model utilises an A* pathfinding algorithm (find-a-path) to calculate optimal routes between patches, which can be adapted to consider environmental factors like obstacles for stealthy approaches.
 
-   - Prey check if they need to escape.
+### Data Export
 
-   - Both prey and hunters update their perception and interact with the environment, such as affecting vegetation.
+The model is designed to export detailed data for analysis. For each hunter, the simulation records their ID, tick (time), x and y coordinates, and the hunting mode they were in at each step. It also exports visual representations of the simulation environment at various stages, including elevation, obstacles, attractiveness to prey, and tracks of both prey and hunters. This comprehensive data collection supports the project's goal of informing computational models of hunter-gatherer mobility and behaviour, including optimising movement strategies and search patterns.
 
-   - Clear outdated tracks and update display as needed.
-
-Hunting bout: line of sight with permeable obstacles (i.e. vegetation)
-![Hunting bout: line of sight with permeable obstacles (i.e. vegetation)](docs/line-of-sight.png)
-
-This structured approach ensures that each agent acts based on their immediate context (sighting or short-term memory), coordinates with others, and interacts with the environment to reflect a dynamic hunting scenario.
+See examples in [`output/`](https://github.com/Andros-Spica/hunter-prey-game-model/tree/main/output).
