@@ -51,11 +51,7 @@ The model incorporates several key mechanisms to simulate realistic interactions
 - Wind Intensity and Direction: Crucial for hunters to avoid being scented by animals.
 - Ecological Zones/Seasons, Fire Management: Broader factors influencing the environmental setup.
 
-Line of sight with permeable obstacles (i.e. vegetation)
-![Line of sight with permeable obstacles (i.e. vegetation)](docs/line-of-sight-updated-v2.png)
-
-Hearing radius
-![Hearing radius](docs/hearing-radius.png)
+<img title="Line of sight with permeable obstacles (i.e. vegetation)" alt="Line of sight with permeable obstacles (i.e. vegetation)" src="docs/line-of-sight-updated-v2.png" width="300px"> <img title="Hearing radius" alt="Hearing radius" src="docs/hearing-radius.png" width="300px">
 
 ### Model Initialisation
 The setup procedure initialises the simulation environment and agents. This involves:
@@ -77,8 +73,7 @@ The setup procedure initialises the simulation environment and agents. This invo
 ### Simulation Steps
 The go procedure drives the simulation, orchestrating agent behaviours in a continuous cycle. Each agent reacts based on immediate sightings, memory of past interactions, and environmental context.
 
-Overall cycle (per second)
-![Hunting bout: overall cycle (per second)](docs/behaviour-diagrams_cycle.png)
+<img title="Overall cycle (per second)" alt="Overall cycle (per second)" src="docs/behaviour-diagrams_cycle.png" width="500px">
 
 The main steps per second (tick) include:
 1. **Detection-Based Reactions**: Agents (prey and hunters) check for immediate sightings.
@@ -106,8 +101,7 @@ The internal logic for agent decisions and state transitions within the hunting 
 States and state transitions for hunters (right) and prey (left)
 ![States and state transitions for hunters (right) and prey (left)](docs/finite-state-machine.png)
 
-Alertness, reaction and relaxation
-![Hunting bout: alertness, reaction and relaxation](docs/alertness.png)
+<img title="Alertness, reaction and relaxation" alt="Alertness, reaction and relaxation" src="docs/alertness.png" width="500px">
 
 To facilitate movement, the model utilises an A* pathfinding algorithm (find-a-path) to calculate optimal routes between patches, which can be adapted to consider environmental factors like obstacles for stealthy approaches.
 
