@@ -21,7 +21,7 @@ Beyond these core hunting phases, the model also incorporates "niche constructio
 The hunting bout is designed as a sequence of modes, which are often non-linear, acknowledging that actual hunting can involve interruptions, dead ends, or changes in strategy. A hunting bout concludes with a successful shot or when hunters decide that success is unlikely and desist. The simulation operates on a scale ranging from seconds to hours, and metres to kilometres.
 
 The Hunting Bout Model interface in NetLogo
-![The Hunting Bout Model interface in NetLogo](docs/screenshots/huntingBout%20example%20interface_success3_hunter-trajectory.png)
+![The Hunting Bout Model interface in NetLogo](docs/screenshots/huntingBout%20example%20interface_success4_hunter-trajectory.png)
 
 The fundamental interaction in the hunting bout is a "complex game of presence, perception, stamina, speed, technology, and skill". Hunters aim to approach and shoot prey undetected, while prey seek to detect hunters or avoid detection altogether. The balance between the number of hunters is crucial, as it boosts perception and increases the hunting party's presence, requiring greater stealth.
 
